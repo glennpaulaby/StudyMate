@@ -1,7 +1,8 @@
 # My contributions:
 - discussed agent behavior, soul, access and capabilities with the rest of the team.
 - deeper dive into how to build agent harnesses and components connectivity
-
+- setup project directory and boilerplate
+- setup study-mate core 
 # Team:
 - Agreed on making LLM study agent
 - Discussed and made upon the ReAct loop diagram 
