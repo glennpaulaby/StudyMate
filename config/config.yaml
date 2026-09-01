@@ -9,7 +9,7 @@ llm:
   model: "qwen-agentworld-35b-a3b"
   temperature: 0.2
   max_tokens: 2048
-  base_url: "https://innkube.fim.uni-passau.de/v1"
+  base_url: "https://llms.innkube.fim.uni-passau.de"
   timeout: 60.0
   # NOTE: Do NOT put API tokens here. Set the INNKUBE_API_KEY environment variable.
 
