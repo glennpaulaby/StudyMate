@@ -1,0 +1,37 @@
+# ==============================================================================
+# AI Engineering Lab - Study Assistant Agent Configuration
+# ==============================================================================
+
+llm:
+  # Recommended models from InnKube cluster:
+  # - qwen-agentworld-35b-a3b
+  # - gemma4-31b-it
+  model: "qwen-agentworld-35b-a3b"
+  temperature: 0.2
+  max_tokens: 2048
+  base_url: "https://innkube.fim.uni-passau.de/v1"
+  timeout: 60.0
+  # NOTE: Do NOT put API tokens here. Set the INNKUBE_API_KEY environment variable.
+
+agent:
+  name: "StudyMate"
+  max_iterations: 15
+  system_prompt_path: "config/soul.md"
+  workspace_dir: "./workspace"
+  data_dir: "./workspace/data"
+  artifacts_dir: "./workspace/artifacts"
+
+tools:
+  filesystem:
+    enabled: true
+    # Sandbox security constraints (Week 1 requirements)
+    allow_delete: false
+    allowed_read_paths:
+      - "./workspace"
+    allowed_write_paths:
+      - "./workspace/artifacts"
+
+observability:
+  log_level: "INFO"
+  metrics_enabled: false
+  metrics_port: 8000
