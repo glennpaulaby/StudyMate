@@ -1,0 +1,15 @@
+services:
+  studymate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: studymate:latest
+    container_name: studymate
+    stdin_open: true
+    tty: true
+    environment:
+      - INNKUBE_API_KEY=${INNKUBE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./workspace:/app/workspace
