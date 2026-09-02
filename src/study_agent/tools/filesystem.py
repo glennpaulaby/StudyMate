@@ -373,6 +373,71 @@ class EditFileTool(BaseTool):
         return f"Successfully edited {path} (replaced 1 occurrence)."
 
 
+class ReadPdfTool(BaseTool):
+    """Tool to extract text from PDF files with page range pagination."""
+
+    def __init__(self, security: PathSecurityManager) -> None:
+        self.security = security
+
+    @property
+    def name(self) -> str:
+        return "read_pdf"
+
+    @property
+    def description(self) -> str:
+        return "Extract text content from a PDF document with optional page range pagination (1-based index)."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the PDF file to read (e.g. 'data/lecture-01.pdf')"
+                },
+                "page_start": {
+                    "type": "integer",
+                    "description": "1-based starting page number (default: 1)"
+                },
+                "page_end": {
+                    "type": "integer",
+                    "description": "1-based ending page number (default: page_start + 10)"
+                }
+            },
+            "required": ["path"]
+        }
+
+    def execute(self, path: str, page_start: int = 1, page_end: Optional[int] = None, **kwargs: Any) -> str:
+        target = self.security.validate_read_path(path)
+        if not target.exists():
+            return f"Error: PDF file not found at {path}"
+        if target.is_dir():
+            return f"Error: Path '{path}' is a directory, not a PDF file."
+
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(str(target))
+            total_pages = len(reader.pages)
+            if total_pages == 0:
+                return f"PDF '{path}' has 0 pages."
+
+            start_idx = max(0, page_start - 1)
+            end_limit = page_end if page_end is not None else (start_idx + 10)
+            end_idx = min(total_pages, end_limit)
+
+            extracted_pages = []
+            for i in range(start_idx, end_idx):
+                page = reader.pages[i]
+                text = page.extract_text() or "(No readable text on this page)"
+                extracted_pages.append(f"--- Page {i + 1}/{total_pages} ---\n{text.strip()}")
+
+            header = f"[PDF: {path} | Total pages: {total_pages} | Showing pages {start_idx + 1}-{end_idx}]\n\n"
+            return header + "\n\n".join(extracted_pages)
+        except Exception as e:
+            return f"Error reading PDF '{path}': {str(e)}"
+
+
 def register_filesystem_tools(
     registry: ToolRegistry,
     base_dir: Optional[Path] = None,
@@ -383,6 +448,8 @@ def register_filesystem_tools(
     registry.register(CreateFolderTool(security))
     registry.register(WriteFileTool(security))
     registry.register(ReadFileTool(security))
+    registry.register(ReadPdfTool(security))
     registry.register(ListFilesTool(security))
     registry.register(SearchTextTool(security))
     registry.register(EditFileTool(security))
+

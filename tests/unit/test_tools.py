@@ -49,15 +49,16 @@ def test_tool_registry_schemas(sandbox_env):
     registry = sandbox_env["registry"]
     schemas = registry.list_schemas()
 
-    assert len(schemas) == 6
+    assert len(schemas) == 7
     names = {s["function"]["name"] for s in schemas}
-    assert names == {"create_folder", "write_file", "read_file", "list_files", "search_text", "edit_file"}
+    assert names == {"create_folder", "write_file", "read_file", "read_pdf", "list_files", "search_text", "edit_file"}
 
     for s in schemas:
         assert s["type"] == "function"
         assert "name" in s["function"]
         assert "description" in s["function"]
         assert "parameters" in s["function"]
+
 
 
 def test_create_folder_and_write_file(sandbox_env):
@@ -202,3 +203,23 @@ def test_unregistered_tool_execution(sandbox_env):
     registry = sandbox_env["registry"]
     res = registry.execute("delete_file", {"path": "artifacts/file.txt"})
     assert "Error: Tool 'delete_file' is not registered." in res
+
+
+def test_read_pdf_tool(sandbox_env):
+    """Verify read_pdf extracts pages and formats output."""
+    from pypdf import PdfWriter
+    
+    registry = sandbox_env["registry"]
+    data_dir = sandbox_env["data_dir"]
+    pdf_path = data_dir / "sample_lecture.pdf"
+
+    # Create a simple PDF with pypdf
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with open(pdf_path, "wb") as f:
+        writer.write(f)
+
+    res = registry.execute("read_pdf", {"path": "data/sample_lecture.pdf"})
+    assert "Total pages: 1" in res
+    assert "Page 1/1" in res
+

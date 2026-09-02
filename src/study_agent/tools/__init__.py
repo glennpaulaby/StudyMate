@@ -4,6 +4,7 @@ from study_agent.tools.filesystem import (
     CreateFolderTool,
     WriteFileTool,
     ReadFileTool,
+    ReadPdfTool,
     ListFilesTool,
     SearchTextTool,
     EditFileTool,
@@ -17,8 +18,10 @@ __all__ = [
     "CreateFolderTool",
     "WriteFileTool",
     "ReadFileTool",
+    "ReadPdfTool",
     "ListFilesTool",
     "SearchTextTool",
     "EditFileTool",
     "register_filesystem_tools",
 ]
+
