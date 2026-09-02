@@ -12,6 +12,9 @@ from study_agent.core.engine import AgentEngine
 from study_agent.core.types import ToolCall
 from study_agent.llm.base import BaseLLMClient
 from study_agent.llm.client import OpenAICompatibleLLMClient
+from study_agent.study.griller import SocraticGriller
+from study_agent.study.linter import VaultLinter
+from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
 from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
 
@@ -32,13 +35,75 @@ def print_banner(config: AppConfig) -> None:
 def print_help() -> None:
     """Displays available interactive CLI commands."""
     table = Table(title="StudyMate Commands", show_header=True, header_style="bold magenta")
-    table.add_column("Command", style="cyan", width=15)
+    table.add_column("Command", style="cyan", width=20)
     table.add_column("Description", style="white")
     table.add_row("/help", "Show this help table")
+    table.add_row("/lint [path]", "Run vault health check (broken links, orphans, open questions)")
+    table.add_row("/grill <topic>", "Launch an interactive Socratic grilling sparring session")
+    table.add_row("/templates", "Display standard Obsidian markdown templates")
     table.add_row("/clear", "Reset conversation history and reload system prompt")
     table.add_row("/config", "Display current configuration parameters")
     table.add_row("/exit, /quit", "Exit StudyMate")
     console.print(table)
+
+
+def run_vault_lint(target_dir: str) -> None:
+    """Executes vault health check and prints a structured Rich summary."""
+    linter = VaultLinter(target_dir)
+    with console.status("[bold green]Linting vault knowledge graph...[/bold green]"):
+        report = linter.lint()
+
+    console.print()
+    if report.total_files == 0:
+        console.print(f"[yellow]No Markdown files found to lint in '{target_dir}'.[/yellow]\n")
+        return
+
+    # Overall Summary Table
+    summary = Table(title=f"Vault Health Report: {target_dir}", show_header=True, header_style="bold cyan")
+    summary.add_column("Metric", style="white")
+    summary.add_column("Count", style="bold")
+    summary.add_column("Status", style="bold")
+
+    summary.add_row("Total Markdown Notes", str(report.total_files), "[green]OK[/green]")
+    summary.add_row("Total [[wikilinks]]", str(report.total_links), "[green]OK[/green]")
+    
+    broken_style = "[green]0 (Clean)[/green]" if len(report.broken_links) == 0 else f"[red]{len(report.broken_links)} Broken[/red]"
+    summary.add_row("Broken Wikilinks", str(len(report.broken_links)), broken_style)
+
+    orphan_style = "[green]0[/green]" if len(report.orphan_pages) == 0 else f"[yellow]{len(report.orphan_pages)} Orphans[/yellow]"
+    summary.add_row("Orphan Pages", str(len(report.orphan_pages)), orphan_style)
+
+    summary.add_row("Open Questions Tracked", str(len(report.open_questions)), f"[cyan]{len(report.open_questions)} Questions[/cyan]")
+    console.print(summary)
+
+    # Broken links details
+    if report.broken_links:
+        broken_table = Table(title="⚠️ Broken Wikilinks Found", show_header=True, header_style="bold red")
+        broken_table.add_column("Source Note", style="yellow")
+        broken_table.add_column("Target Link", style="red")
+        for src, tgt in report.broken_links[:10]:
+            broken_table.add_row(src, f"[[{tgt}]]")
+        console.print(broken_table)
+
+    # Orphan pages details
+    if report.orphan_pages:
+        console.print("\n[bold yellow]📌 Orphan Pages (no incoming links):[/bold yellow]")
+        for orphan in report.orphan_pages[:10]:
+            console.print(f"  - {orphan}")
+
+    # Open questions
+    if report.open_questions:
+        console.print("\n[bold cyan]❓ Unresolved Open Questions:[/bold cyan]")
+        for src, q in report.open_questions[:10]:
+            console.print(f"  - [dim]{src}:[/dim] {q}")
+    console.print()
+
+
+def print_templates() -> None:
+    """Displays standard Obsidian study note templates."""
+    console.print(Panel(CONCEPT_TEMPLATE, title="📝 Obsidian Concept Note Template", border_style="green"))
+    console.print(Panel(LECTURE_TEMPLATE, title="📖 Obsidian Lecture Summary Template", border_style="blue"))
+    console.print(Panel(FLASHCARD_TEMPLATE, title="🗂️ Flashcard Deck Template", border_style="magenta"))
 
 
 def print_config(config: AppConfig) -> None:
@@ -99,6 +164,19 @@ def run_cli(
             elif user_input.lower() == "/help":
                 print_help()
                 continue
+            elif user_input.lower() == "/templates":
+                print_templates()
+                continue
+            elif user_input.lower().startswith("/lint"):
+                parts = user_input.split(maxsplit=1)
+                target_path = parts[1] if len(parts) > 1 else app_config.agent.artifacts_dir
+                run_vault_lint(target_path)
+                continue
+            elif user_input.lower().startswith("/grill"):
+                parts = user_input.split(maxsplit=1)
+                topic = parts[1] if len(parts) > 1 else "Core Concepts"
+                user_input = SocraticGriller.create_initial_prompt(topic)
+                console.print(f"[bold magenta]🥊 Launching Socratic Grilling Session on '{topic}'...[/bold magenta]\n")
             elif user_input.lower() == "/clear":
                 context.clear()
                 console.print("[green]✓ Conversation history reset.[/green]")
@@ -142,4 +220,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
