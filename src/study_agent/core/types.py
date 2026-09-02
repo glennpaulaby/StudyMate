@@ -36,6 +36,7 @@ class ChatMessage(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes to standard OpenAI-compatible message dictionary."""
+        import json as _json
         data: Dict[str, Any] = {"role": self.role.value}
         if self.content is not None:
             data["content"] = self.content
@@ -46,7 +47,7 @@ class ChatMessage(BaseModel):
                     "type": "function",
                     "function": {
                         "name": tc.name,
-                        "arguments": tc.arguments if isinstance(tc.arguments, str) else str(tc.arguments).replace("'", '"')
+                        "arguments": tc.arguments if isinstance(tc.arguments, str) else _json.dumps(tc.arguments)
                     }
                 }
                 for tc in self.tool_calls
@@ -56,6 +57,7 @@ class ChatMessage(BaseModel):
         if self.name:
             data["name"] = self.name
         return data
+
 
 
 class LLMResponse(BaseModel):

@@ -1,5 +1,16 @@
 import sys
 from typing import Optional
+
+# Ensure UTF-8 output encoding on Windows terminals to support emojis and Unicode symbols
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -19,6 +30,7 @@ from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
 
 console = Console()
+
 
 
 def print_banner(config: AppConfig) -> None:
