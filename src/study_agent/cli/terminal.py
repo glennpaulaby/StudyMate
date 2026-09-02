@@ -50,6 +50,7 @@ def print_help() -> None:
     table.add_column("Command", style="cyan", width=20)
     table.add_column("Description", style="white")
     table.add_row("/help", "Show this help table")
+    table.add_row("/ingest [path]", "Ingest source files and generate Obsidian concept notes + lecture summary")
     table.add_row("/lint [path]", "Run vault health check (broken links, orphans, open questions)")
     table.add_row("/grill <topic>", "Launch an interactive Socratic grilling sparring session")
     table.add_row("/templates", "Display standard Obsidian markdown templates")
@@ -189,6 +190,20 @@ def run_cli(
                 topic = parts[1] if len(parts) > 1 else "Core Concepts"
                 user_input = SocraticGriller.create_initial_prompt(topic)
                 console.print(f"[bold magenta]🥊 Launching Socratic Grilling Session on '{topic}'...[/bold magenta]\n")
+            elif user_input.lower().startswith("/ingest"):
+                parts = user_input.split(maxsplit=1)
+                source_path = parts[1].strip() if len(parts) > 1 else app_config.agent.data_dir
+                user_input = (
+                    f"Ingest the source material located at '{source_path}'. "
+                    f"List all files in that directory first, then read each file, "
+                    f"and for each one: write a lecture summary note and create individual "
+                    f"concept notes for every key concept mentioned. "
+                    f"Save lecture summaries as 'workspace/artifacts/lecture-<slug>.md' "
+                    f"and concept notes as 'workspace/artifacts/concept-<slug>.md'. "
+                    f"Cross-link concept notes to their lecture using [[wikilinks]]."
+                )
+                console.print(f"[bold green]📥 Ingesting source material from '{source_path}'...[/bold green]\n")
+
             elif user_input.lower() == "/clear":
                 context.clear()
                 console.print("[green]✓ Conversation history reset.[/green]")
