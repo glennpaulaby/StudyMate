@@ -1,4 +1,4 @@
-﻿from enum import Enum
+from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -66,3 +66,16 @@ class LLMResponse(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     raw_response: Optional[Dict[str, Any]] = None
+
+
+class AgentRunResult(BaseModel):
+    """Result of an end-to-end agent execution turn."""
+    final_response: str = ""
+    iterations: int = 0
+    tool_calls_count: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    is_success: bool = True
+    error_message: Optional[str] = None
+

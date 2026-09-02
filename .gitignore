@@ -58,3 +58,5 @@ coverage.xml
 # Temporary outputs & logs
 logs/
 *.log
+uv.lock
+

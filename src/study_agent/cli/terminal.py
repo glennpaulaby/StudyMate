@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from typing import Optional
 from rich.console import Console
 from rich.markdown import Markdown
@@ -8,8 +8,12 @@ from rich.table import Table
 from study_agent.config.loader import load_config
 from study_agent.config.settings import AppConfig
 from study_agent.core.context import ContextManager
+from study_agent.core.engine import AgentEngine
+from study_agent.core.types import ToolCall
 from study_agent.llm.base import BaseLLMClient
 from study_agent.llm.client import OpenAICompatibleLLMClient
+from study_agent.tools.base import ToolRegistry
+from study_agent.tools.filesystem import register_filesystem_tools
 
 console = Console()
 
@@ -57,7 +61,8 @@ def print_config(config: AppConfig) -> None:
 
 def run_cli(
     config: Optional[AppConfig] = None,
-    llm_client: Optional[BaseLLMClient] = None
+    llm_client: Optional[BaseLLMClient] = None,
+    tool_registry: Optional[ToolRegistry] = None
 ) -> None:
     """
     Main interactive REPL loop for StudyMate.
@@ -65,22 +70,28 @@ def run_cli(
     app_config = config or load_config()
     client = llm_client or OpenAICompatibleLLMClient(app_config.llm)
     context = ContextManager(system_prompt_path=app_config.agent.system_prompt_path)
-    
+
+    registry = tool_registry or ToolRegistry()
+    if tool_registry is None and app_config.tools.filesystem.enabled:
+        register_filesystem_tools(registry, config=app_config.tools.filesystem)
+
+    engine = AgentEngine(llm_client=client, tool_registry=registry, config=app_config.agent)
+
     print_banner(app_config)
-    
+
     if not app_config.llm.api_key:
         console.print(
             "\n[bold yellow]⚠️  Warning:[/bold yellow] No API key detected. "
             "Set [cyan]INNKUBE_API_KEY[/cyan] in your [cyan].env[/cyan] file to communicate with the model.\n"
         )
-    
+
     while True:
         try:
             user_input = console.input("[bold cyan]student > [/bold cyan]").strip()
-            
+
             if not user_input:
                 continue
-                
+
             # Handle slash commands
             if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
                 console.print("[dim]Goodbye and happy studying! 🎓[/dim]")
@@ -95,29 +106,30 @@ def run_cli(
             elif user_input.lower() == "/config":
                 print_config(app_config)
                 continue
-                
-            # Add user message to history
-            context.add_user_message(user_input)
-            
-            # Send to LLM with animated status
+
+            def on_tool_start(tc: ToolCall) -> None:
+                console.print(f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{tc.name}[/yellow] [dim]{tc.arguments}[/dim]")
+
+            # Run ReAct Loop with animated status
             with console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots"):
                 try:
-                    response = client.chat(messages=context.get_messages())
+                    result = engine.run(
+                        user_message=user_input,
+                        context=context,
+                        on_tool_start=on_tool_start
+                    )
                 except Exception as e:
-                    console.print(f"\n[bold red]Error communicating with LLM:[/bold red] {e}\n")
+                    console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
                     continue
-            
-            # Add assistant message to history
-            context.add_assistant_message(content=response.content, tool_calls=response.tool_calls)
-            
+
             # Render response
             console.print()
-            if response.content:
-                console.print(Markdown(response.content))
+            if result.final_response:
+                console.print(Markdown(result.final_response))
             else:
                 console.print("[dim](No text response)[/dim]")
             console.print()
-            
+
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session ended. Goodbye! 🎓[/dim]")
             break
@@ -125,12 +137,9 @@ def run_cli(
 
 def main() -> None:
     """CLI entrypoint invoked by `studymate` console script."""
-    run_cli(
-        config=(
-            
-        )
-    )
+    run_cli()
 
 
 if __name__ == "__main__":
     main()
+
