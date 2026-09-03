@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 from typing import Optional
 
 # Ensure UTF-8 output encoding on Windows terminals to support emojis and Unicode symbols
@@ -152,7 +153,14 @@ def run_cli(
 
     registry = tool_registry or ToolRegistry()
     if tool_registry is None and app_config.tools.filesystem.enabled:
-        register_filesystem_tools(registry, config=app_config.tools.filesystem)
+        project_root = Path.cwd().resolve()
+        workspace_root = (project_root / app_config.agent.workspace_dir).resolve()
+        register_filesystem_tools(
+            registry,
+            base_dir=project_root,
+            config=app_config.tools.filesystem,
+            workspace_root=workspace_root,
+        )
 
     engine = AgentEngine(llm_client=client, tool_registry=registry, config=app_config.agent)
 
@@ -242,9 +250,9 @@ def run_cli(
             if result.final_response:
                 console.print(Markdown(result.final_response))
             elif not result.is_success:
-                console.print(f"[bold red]Ingestion stopped:[/bold red] {result.error_message or 'The agent did not return a response.'}")
+                console.print(f"[bold red]Agent stopped:[/bold red] {result.error_message or 'The agent did not return a response.'}")
             else:
-                console.print("[bold red]The agent stopped without returning a response. Please try /ingest again.[/bold red]")
+                console.print("[bold red]The agent stopped without returning a response. Please try again.[/bold red]")
             console.print()
 
         except (KeyboardInterrupt, EOFError):

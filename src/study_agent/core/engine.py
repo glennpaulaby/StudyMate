@@ -78,6 +78,22 @@ class AgentEngine:
                     )
                     continue
 
+                if not (response.content or "").strip():
+                    message = (
+                        "The model returned an empty response after "
+                        f"{iterations} attempt(s). No completion summary was produced."
+                    )
+                    return AgentRunResult(
+                        final_response=message,
+                        iterations=iterations,
+                        tool_calls_count=tool_calls_count,
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
+                        total_tokens=total_tokens,
+                        is_success=False,
+                        error_message=message,
+                    )
+
                 if response.finish_reason == "length" and iterations < self.config.max_iterations:
                     context.add_user_message(
                         "Continue from where you stopped. Finish the requested task and "

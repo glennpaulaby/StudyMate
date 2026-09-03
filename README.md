@@ -227,7 +227,7 @@ docker run -it --rm \
 - [x] **Week 1: Core ReAct Harness, Sandboxed Tools & Study Vault Engine**
   - Interactive terminal CLI (`studymate`) with `/lint`, `/grill`, `/templates`
   - YAML configuration with environment variable secret handling
-  - Sandboxed tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`)
+  - Sandboxed tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`, `rename_file`)
   - Strict security boundaries (workspace path jail, read-only data, delete strictly prohibited)
   - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
   - 58 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, the CLI REPL, and study ingestion workflows)

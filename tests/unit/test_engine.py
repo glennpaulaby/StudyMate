@@ -121,6 +121,25 @@ def test_react_continues_after_empty_response():
     assert "Your last response was empty." in mock_llm.call_history[1][-1].content
 
 
+def test_react_reports_repeated_empty_response_as_failure():
+    """Verify repeated empty model output is surfaced instead of reported as success."""
+    mock_llm = MockLLMClient(
+        responses=[
+            LLMResponse(content=None),
+            LLMResponse(content=None),
+        ]
+    )
+    result = AgentEngine(
+        llm_client=mock_llm,
+        tool_registry=ToolRegistry(),
+        config=AgentConfig(max_iterations=2),
+    ).run("Replace x with y.", ContextManager())
+
+    assert result.is_success is False
+    assert result.error_message is not None
+    assert "empty response" in result.final_response
+
+
 def test_react_max_iterations_bound():
     """Verify ReAct loop terminates gracefully when max_iterations is reached."""
     mock_llm = MockLLMClient()

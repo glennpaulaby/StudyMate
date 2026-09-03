@@ -10,6 +10,7 @@ from study_agent.tools.filesystem import (
     ListFilesTool,
     SearchTextTool,
     EditFileTool,
+    RenameFileTool,
     register_filesystem_tools,
 )
 
@@ -49,9 +50,9 @@ def test_tool_registry_schemas(sandbox_env):
     registry = sandbox_env["registry"]
     schemas = registry.list_schemas()
 
-    assert len(schemas) == 7
+    assert len(schemas) == 8
     names = {s["function"]["name"] for s in schemas}
-    assert names == {"create_folder", "write_file", "read_file", "read_pdf", "list_files", "search_text", "edit_file"}
+    assert names == {"create_folder", "write_file", "read_file", "read_pdf", "list_files", "search_text", "edit_file", "rename_file"}
 
     for s in schemas:
         assert s["type"] == "function"
@@ -174,6 +175,37 @@ def test_edit_file_errors(sandbox_env):
     assert "appears 3 times" in res_multi
 
 
+def test_rename_file_moves_only_within_artifacts(sandbox_env):
+    """Verify natural-language rename requests have a safe filesystem operation."""
+    registry = sandbox_env["registry"]
+    source = sandbox_env["artifacts_dir"] / "concept.md"
+    destination = sandbox_env["artifacts_dir"] / "whatever.md"
+    source.write_text("content", encoding="utf-8")
+
+    result = registry.execute(
+        "rename_file",
+        {"source": "artifacts/concept.md", "destination": "artifacts/whatever.md"},
+    )
+
+    assert "Successfully renamed" in result
+    assert not source.exists()
+    assert destination.read_text(encoding="utf-8") == "content"
+
+
+def test_configured_paths_cannot_escape_workspace(sandbox_env):
+    """Verify configured absolute roots outside the workspace are rejected."""
+    outside = sandbox_env["workspace"].parent / "outside"
+    with pytest.raises(PermissionError, match="contained by the workspace"):
+        PathSecurityManager(
+            base_dir=sandbox_env["workspace"].parent,
+            workspace_root=sandbox_env["workspace"],
+            config=FilesystemToolConfig(
+                allowed_read_paths=[str(outside)],
+                allowed_write_paths=[str(sandbox_env["artifacts_dir"])],
+            ),
+        )
+
+
 def test_security_path_jail_escape_attempt(sandbox_env):
     """Verify that attempting to escape the sandbox via traversal is blocked."""
     registry = sandbox_env["registry"]
@@ -223,3 +255,22 @@ def test_read_pdf_tool(sandbox_env):
     assert "Total pages: 1" in res
     assert "Page 1/1" in res
 
+
+def test_read_pdf_caps_requested_page_batch(sandbox_env):
+    """Verify oversized PDF requests are bounded and provide continuation guidance."""
+    from pypdf import PdfWriter
+
+    pdf_path = sandbox_env["data_dir"] / "multi_page.pdf"
+    writer = PdfWriter()
+    for _ in range(12):
+        writer.add_blank_page(width=72, height=72)
+    with open(pdf_path, "wb") as f:
+        writer.write(f)
+
+    result = sandbox_env["registry"].execute(
+        "read_pdf",
+        {"path": "data/multi_page.pdf", "page_start": 1, "page_end": 20},
+    )
+
+    assert "Showing pages 1-10" in result
+    assert "Continue with page_start=11" in result

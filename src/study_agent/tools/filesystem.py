@@ -18,10 +18,19 @@ class PathSecurityManager:
     def __init__(
         self,
         base_dir: Optional[Path] = None,
-        config: Optional[FilesystemToolConfig] = None
+        config: Optional[FilesystemToolConfig] = None,
+        workspace_root: Optional[Path] = None,
     ) -> None:
         self.base_dir = (base_dir or Path.cwd()).resolve()
         self.config = config or FilesystemToolConfig()
+        raw_workspace_root = workspace_root or self.base_dir
+        self.workspace_root = (
+            (self.base_dir / raw_workspace_root).resolve()
+            if not Path(raw_workspace_root).is_absolute()
+            else Path(raw_workspace_root).resolve()
+        )
+        if not self._is_subpath(self.workspace_root, self.base_dir):
+            raise ValueError("workspace_root must be contained by base_dir")
         
         # Resolve allowed paths relative to base_dir
         self.allowed_read_roots = [
@@ -33,6 +42,10 @@ class PathSecurityManager:
             (self.base_dir / p).resolve() if not Path(p).is_absolute() else Path(p).resolve()
             for p in self.config.allowed_write_paths
         ] if self.config.allowed_write_paths else [self.base_dir]
+        if any(not self._is_subpath(root, self.workspace_root) for root in self.allowed_read_roots):
+            raise PermissionError("Configured read paths must be contained by the workspace sandbox.")
+        if any(not self._is_subpath(root, self.workspace_root) for root in self.allowed_write_roots):
+            raise PermissionError("Configured write paths must be contained by the workspace sandbox.")
 
     def _is_subpath(self, target: Path, parent: Path) -> bool:
         """Checks if target is equal to or a subpath of parent."""
@@ -373,6 +386,46 @@ class EditFileTool(BaseTool):
         return f"Successfully edited {path} (replaced 1 occurrence)."
 
 
+class RenameFileTool(BaseTool):
+    """Tool to rename a file without allowing deletion or sandbox escapes."""
+
+    def __init__(self, security: PathSecurityManager) -> None:
+        self.security = security
+
+    @property
+    def name(self) -> str:
+        return "rename_file"
+
+    @property
+    def description(self) -> str:
+        return "Rename a file within the writable artifacts sandbox."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Existing file path to rename"},
+                "destination": {"type": "string", "description": "New file path"},
+            },
+            "required": ["source", "destination"],
+        }
+
+    def execute(self, source: str, destination: str, **kwargs: Any) -> str:
+        source_path = self.security.validate_write_path(source)
+        destination_path = self.security.validate_write_path(destination)
+        if not source_path.exists():
+            return f"Error: File not found at {source}"
+        if source_path.is_dir():
+            return f"Error: Path '{source}' is a directory."
+        if destination_path.exists():
+            return f"Error: Destination already exists at {destination}. Refusing to overwrite it."
+
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(source_path, destination_path)
+        return f"Successfully renamed {source} to {destination}."
+
+
 class ReadPdfTool(BaseTool):
     """Tool to extract text from PDF files with page range pagination."""
 
@@ -424,6 +477,7 @@ class ReadPdfTool(BaseTool):
 
             start_idx = max(0, page_start - 1)
             end_limit = page_end if page_end is not None else (start_idx + 10)
+            end_limit = min(end_limit, start_idx + 10)
             end_idx = min(total_pages, end_limit)
 
             extracted_pages = []
@@ -432,7 +486,15 @@ class ReadPdfTool(BaseTool):
                 text = page.extract_text() or "(No readable text on this page)"
                 extracted_pages.append(f"--- Page {i + 1}/{total_pages} ---\n{text.strip()}")
 
-            header = f"[PDF: {path} | Total pages: {total_pages} | Showing pages {start_idx + 1}-{end_idx}]\n\n"
+            header = (
+                f"[PDF: {path} | Total pages: {total_pages} | "
+                f"Showing pages {start_idx + 1}-{end_idx}]\n\n"
+            )
+            if page_end is not None and page_end > end_idx:
+                header += (
+                    f"Continue with page_start={end_idx + 1} and "
+                    f"page_end={min(total_pages, end_idx + 10)} to read the next batch.\n\n"
+                )
             return header + "\n\n".join(extracted_pages)
         except Exception as e:
             return f"Error reading PDF '{path}': {str(e)}"
@@ -441,10 +503,15 @@ class ReadPdfTool(BaseTool):
 def register_filesystem_tools(
     registry: ToolRegistry,
     base_dir: Optional[Path] = None,
-    config: Optional[FilesystemToolConfig] = None
+    config: Optional[FilesystemToolConfig] = None,
+    workspace_root: Optional[Path] = None,
 ) -> None:
     """Registers all sandboxed filesystem tools into the provided registry."""
-    security = PathSecurityManager(base_dir=base_dir, config=config)
+    security = PathSecurityManager(
+        base_dir=base_dir,
+        config=config,
+        workspace_root=workspace_root,
+    )
     registry.register(CreateFolderTool(security))
     registry.register(WriteFileTool(security))
     registry.register(ReadFileTool(security))
@@ -452,4 +519,4 @@ def register_filesystem_tools(
     registry.register(ListFilesTool(security))
     registry.register(SearchTextTool(security))
     registry.register(EditFileTool(security))
-
+    registry.register(RenameFileTool(security))

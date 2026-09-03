@@ -15,7 +15,7 @@ llm:
 
 agent:
   name: "StudyMate"
-  max_iterations: 15
+  max_iterations: 50
   system_prompt_path: "config/soul.md"
   workspace_dir: "./workspace"
   data_dir: "./workspace/data"
