@@ -64,6 +64,7 @@ class LLMResponse(BaseModel):
     """Output from the LLM inference call."""
     content: Optional[str] = None
     tool_calls: List[ToolCall] = Field(default_factory=list)
+    finish_reason: Optional[str] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -80,4 +81,3 @@ class AgentRunResult(BaseModel):
     total_tokens: int = 0
     is_success: bool = True
     error_message: Optional[str] = None
-

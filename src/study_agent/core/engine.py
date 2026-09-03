@@ -67,8 +67,24 @@ class AgentEngine:
                 tool_calls=response.tool_calls if response.tool_calls else None
             )
 
-            # 2. Terminal condition: No tool calls generated -> Final answer reached
+            # A length cutoff can leave a final answer incomplete. Ask the model
+            # to continue instead of rendering the partial response as final.
             if not response.tool_calls:
+                if not (response.content or "").strip() and iterations < self.config.max_iterations:
+                    context.add_user_message(
+                        "Your last response was empty. Continue the requested task now. "
+                        "Use the available tools if work remains, then provide a concise "
+                        "completion summary."
+                    )
+                    continue
+
+                if response.finish_reason == "length" and iterations < self.config.max_iterations:
+                    context.add_user_message(
+                        "Continue from where you stopped. Finish the requested task and "
+                        "provide the completion summary. Keep the response concise."
+                    )
+                    continue
+
                 return AgentRunResult(
                     final_response=response.content or "",
                     iterations=iterations,

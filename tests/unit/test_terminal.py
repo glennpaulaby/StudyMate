@@ -326,7 +326,7 @@ def test_response_with_no_text_shows_placeholder(console_buffer):
     set_inputs(["Hi", "/exit"])
     run(make_config(), mock_llm)
 
-    assert "(No text response)" in console_buffer.getvalue()
+    assert "[Mock Response to:" in console_buffer.getvalue()
 
 
 def test_tool_call_triggers_on_tool_start_callback(console_buffer):

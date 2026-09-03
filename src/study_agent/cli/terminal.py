@@ -194,14 +194,18 @@ def run_cli(
             elif user_input.lower().startswith("/ingest"):
                 parts = user_input.split(maxsplit=1)
                 source_path = parts[1].strip() if len(parts) > 1 else app_config.agent.data_dir
+                artifacts_path = app_config.agent.artifacts_dir
                 user_input = (
                     f"Ingest the source material located at '{source_path}'. "
                     f"List all files in that directory first, then read each file, "
                     f"and for each one: write a lecture summary note and create individual "
                     f"concept notes for every key concept mentioned. "
-                    f"Save lecture summaries as 'workspace/artifacts/lecture-<slug>.md' "
-                    f"and concept notes as 'workspace/artifacts/concept-<slug>.md'. "
-                    f"Cross-link concept notes to their lecture using [[wikilinks]]."
+                    f"Save lecture summaries as '{artifacts_path}/lecture-<slug>.md' "
+                    f"and concept notes as '{artifacts_path}/concept-<slug>.md'. "
+                    "Do not create the artifact root folder; write_file creates parent folders automatically. "
+                    f"Cross-link concept notes to their lecture using [[wikilinks]]. "
+                    "After all files are processed, provide a concise completion summary "
+                    "listing the artifacts that were created. Do not finish with an empty response."
                 )
                 console.print(f"[bold green]📥 Ingesting source material from '{source_path}'...[/bold green]\n")
 
@@ -251,5 +255,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

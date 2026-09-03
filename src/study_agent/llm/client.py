@@ -78,6 +78,7 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
             return LLMResponse(
                 content=message.content,
                 tool_calls=parsed_tool_calls,
+                finish_reason=choice.finish_reason,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens

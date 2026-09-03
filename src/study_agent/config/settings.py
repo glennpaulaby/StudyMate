@@ -15,7 +15,7 @@ class LLMConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Configuration for the StudyMate agent core behavior and paths."""
     name: str = Field(default="StudyMate", description="Agent persona name")
-    max_iterations: int = Field(default=15, ge=1, le=50, description="Max ReAct loop iterations")
+    max_iterations: int = Field(default=60, ge=1, le=50, description="Max ReAct loop iterations")
     system_prompt_path: str = Field(default="config/soul.md", description="Path to agent persona directives")
     workspace_dir: str = Field(default="./workspace", description="Root sandbox directory")
     data_dir: str = Field(default="./workspace/data", description="Read-only source documents directory")

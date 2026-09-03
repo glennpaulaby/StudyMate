@@ -2,7 +2,7 @@ from pathlib import Path
 from study_agent.config.settings import AgentConfig, FilesystemToolConfig
 from study_agent.core.context import ContextManager
 from study_agent.core.engine import AgentEngine
-from study_agent.core.types import ToolCall
+from study_agent.core.types import LLMResponse, ToolCall
 from study_agent.llm.mock import MockLLMClient
 from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
@@ -75,6 +75,50 @@ def test_react_multi_step_tool_execution(tmp_path: Path):
     assert tool_started == ["read_file"]
     assert len(tool_ended) == 1
     assert "Eulerian path visits every edge" in tool_ended[0][1]
+
+
+def test_react_continues_after_length_truncated_response():
+    """Verify a length-truncated model response gets a continuation turn."""
+    mock_llm = MockLLMClient(
+        responses=[
+            LLMResponse(content="The summary is incomplete", finish_reason="length"),
+            LLMResponse(content="The lecture was ingested successfully."),
+        ]
+    )
+
+    engine = AgentEngine(
+        llm_client=mock_llm,
+        tool_registry=ToolRegistry(),
+        config=AgentConfig(max_iterations=3),
+    )
+    result = engine.run("Ingest the lecture material.", ContextManager())
+
+    assert result.is_success is True
+    assert result.iterations == 2
+    assert result.final_response == "The lecture was ingested successfully."
+    assert "Continue from where you stopped." in mock_llm.call_history[1][-1].content
+
+
+def test_react_continues_after_empty_response():
+    """Verify an empty terminal response does not stop a tool workflow."""
+    mock_llm = MockLLMClient(
+        responses=[
+            LLMResponse(content=None),
+            LLMResponse(content="Ingestion completed."),
+        ]
+    )
+
+    engine = AgentEngine(
+        llm_client=mock_llm,
+        tool_registry=ToolRegistry(),
+        config=AgentConfig(max_iterations=3),
+    )
+    result = engine.run("Ingest the lecture material.", ContextManager())
+
+    assert result.is_success is True
+    assert result.iterations == 2
+    assert result.final_response == "Ingestion completed."
+    assert "Your last response was empty." in mock_llm.call_history[1][-1].content
 
 
 def test_react_max_iterations_bound():
