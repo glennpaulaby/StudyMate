@@ -1,0 +1,193 @@
+# StudyMate 🎓
+
+StudyMate is an autonomous AI agent harness built from scratch in Python 3.12 for the *AI Engineering Lab (SoSe 2026)* at the University of Passau. It enables university students to prepare for courses and exams by autonomously analyzing source materials and compiling structured, interconnected Obsidian knowledge bases and study artifacts (flashcards, mind maps, concept glossaries, and Socratic sparring sessions).
+
+---
+
+## Overview and Features
+
+StudyMate operates directly from the terminal via an interactive CLI (`studymate`). Built on the **ReAct (Reason + Act)** paradigm, it functions as an autonomous study assistant:
+
+- **Source Material Ingestion**: Autonomously inspects and extracts text from lecture slides (`.txt`, `.md`, `.pdf`), research papers, exercise sheets, and textbook notes stored in `workspace/data/`.
+- **Atomic Obsidian Knowledge Base**: Generates interconnected study notes in `workspace/artifacts/`:
+  - **Concept Notes**: Slugs with standardized YAML frontmatter, Core Intuition, Formal Definitions, Worked Examples, Pitfalls, and `[[wikilinks]]`.
+  - **Lecture Summaries**: Synthesized high-level lecture overviews with bidirectional links to atomic concepts.
+  - **Flashcards**: Markdown-formatted active recall question-answer decks (compatible with Anki and Obsidian).
+- **Vault Health Check (Linter)**: Autonomous verification of the knowledge base graph via `/lint`:
+  - Detects broken `[[wikilinks]]` referencing non-existent notes.
+  - Identifies orphan pages with zero inbound links.
+  - Aggregates and surfaces pending open questions.
+- **Socratic Grilling (`/grill <topic>`)**: Interactive active recall sparring partner enforcing German academic rigor across escalating difficulty levels (Recall $\to$ Application $\to$ Edge Case).
+- **Strict Sandbox & Security Boundaries**:
+  - `workspace/data/`: **Read-Only** (the immutable source of truth and knowledge base).
+  - `workspace/artifacts/`: **Read, Write, and Edit** (where generated study artifacts reside).
+  - **No Deletion Guarantee**: The agent is strictly prohibited from deleting any files or directories across all paths.
+  - **Jail Containment**: All file operations are sandboxed strictly within `./workspace/`; directory traversal outside this boundary is rejected.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    User([Student / Terminal]) <-->|CLI: studymate| CLI[Terminal UI / REPL]
+    CLI <--> Core[ReAct Engine / State Machine]
+    CLI <--> Linter[Vault Linter & Health Check]
+    CLI <--> Griller[Socratic Grilling Sparring]
+    
+    subgraph Harness["StudyMate Agent Harness"]
+        Core <--> Context[Context Manager]
+        Core <--> LLM[LLM Client / InnKube Endpoint]
+        Core <--> Registry[Tool Registry]
+        Registry <--> Security[Security & Path Jail Policy]
+        Security <--> FS[Filesystem & PDF Tools]
+    end
+    
+    subgraph Sandbox["Workspace Sandbox"]
+        FS -.->|Read Only| Data[("workspace/data/<br/>(Course Documents & PDFs)")]
+        FS <-->|Read / Write / Edit| Artifacts[("workspace/artifacts/<br/>(Obsidian Study Notes)")]
+    end
+```
+
+---
+
+## Project Structure
+
+```text
+project/group-11/
+├── config/
+│   ├── config.yaml             # Model, agent parameters, and tool sandbox settings
+│   └── soul.md                 # Agent persona, directives, and output conventions
+├── src/
+│   └── study_agent/
+│       ├── cli/                # Terminal interactive REPL (studymate)
+│       ├── config/             # Configuration schemas and YAML/env loader
+│       ├── core/               # ReAct loop, context manager, and state machine
+│       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
+│       ├── tools/              # Tool registry and sandboxed filesystem & PDF tools
+│       ├── study/              # Obsidian templates, VaultLinter, and SocraticGriller
+│       ├── memory/             # Persistent long-term memory (Week 2)
+│       ├── observability/      # Prometheus telemetry & lifecycle hooks (Week 3)
+│       ├── security/           # Multi-tier permission management (Week 3)
+│       └── subagents/          # Specialized sub-agent coordination (Week 3)
+├── tests/
+│   ├── unit/                   # Unit tests (config, context, LLM, tools, engine, linter)
+│   └── e2e/                    # End-to-end benchmark & study workflow tests
+├── workspace/
+│   ├── data/                   # Input study materials (Read-Only)
+│   └── artifacts/              # Generated study artifacts (Read/Write/Edit)
+├── compose.yaml                # Docker Compose multi-platform launcher
+├── Dockerfile                  # Container definition (python:3.12-slim-bookworm)
+├── pyproject.toml              # Modern Python packaging & CLI entrypoint
+└── requirements.txt            # Locked project dependencies
+```
+
+---
+
+## Getting Started
+
+### 1. Prerequisites
+- Python 3.12+
+- Docker or Podman (for containerized execution)
+
+### 2. Local Setup
+```bash
+# Navigate to the project directory
+cd project/group-11
+
+# Create and activate a Python 3.12 virtual environment
+python -m venv venv
+
+# On Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+
+# On Linux/macOS:
+source venv/bin/activate
+
+# Install dependencies and package in editable mode
+pip install -r requirements.txt
+pip install -e .
+```
+
+### 3. Environment Configuration
+Create a `.env` file from the provided template and configure your InnKube API token:
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+```env
+INNKUBE_API_KEY=your_innkube_token_here
+```
+
+### 4. Running StudyMate
+Once installed, launch the interactive agent terminal using:
+```bash
+studymate
+```
+
+#### Interactive Commands in REPL:
+- `/help` — Display command guide
+- `/lint [path]` — Run knowledge graph health check on study artifacts
+- `/grill <topic>` — Launch an interactive Socratic sparring session on a topic
+- `/templates` — Display standard Obsidian markdown templates
+- `/clear` — Reset conversation history
+- `/config` — View active runtime settings
+- `/exit, /quit` — Quit StudyMate
+
+---
+
+## Testing
+
+Execute the automated test suite with pytest (31 unit and E2E tests):
+```bash
+# Run all tests
+pytest
+
+# Or via uv:
+uv run --with pytest --with pytest-mock pytest
+```
+
+---
+
+## Containerization (Docker)
+
+To execute StudyMate inside an isolated Debian-based container (`python:3.12-slim-bookworm`):
+
+### Option A: Using Docker Compose (Recommended)
+```bash
+docker compose run --rm studymate
+```
+
+### Option B: Using Standard Docker CLI
+```bash
+# Build the container image
+docker build -t studymate .
+
+# Run the agent interactively with mounted workspace
+docker run -it --rm \
+  -e INNKUBE_API_KEY="your_api_key" \
+  -v ./workspace:/app/workspace \
+  studymate
+```
+
+---
+
+## Roadmap and Milestones
+
+- [x] **Week 1: Core ReAct Harness, Sandboxed Tools & Study Vault Engine**
+  - Interactive terminal CLI (`studymate`) with `/lint`, `/grill`, `/templates`
+  - YAML configuration with environment variable secret handling
+  - Sandboxed tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`)
+  - Strict security boundaries (workspace path jail, read-only data, delete strictly prohibited)
+  - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
+  - 31 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, and study ingestion workflows)
+  - Containerization with `Dockerfile` and `compose.yaml`
+- [ ] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
+  - Dynamic MCP client integration and runtime tool discovery
+  - Custom non-trivial MCP tool extension
+  - Persistent long-term memory across sessions
+- [ ] **Week 3: Observability, Permissions, and Sub-Agents**
+  - Prometheus metrics instrumentation and dashboard
+  - Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`)
+  - Specialized sub-agents with task delegation on the same harness
