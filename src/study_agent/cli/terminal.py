@@ -13,6 +13,7 @@ if sys.platform == "win32":
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -50,8 +51,8 @@ def print_help() -> None:
     table.add_column("Command", style="cyan", width=20)
     table.add_column("Description", style="white")
     table.add_row("/help", "Show this help table")
-    table.add_row("/ingest [path]", "Ingest source files and generate Obsidian concept notes + lecture summary")
-    table.add_row("/lint [path]", "Run vault health check (broken links, orphans, open questions)")
+    table.add_row(escape("/ingest [path]"), "Ingest source files and generate Obsidian concept notes + lecture summary")
+    table.add_row(escape("/lint [path]"), "Run vault health check (broken links, orphans, open questions)")
     table.add_row("/grill <topic>", "Launch an interactive Socratic grilling sparring session")
     table.add_row("/templates", "Display standard Obsidian markdown templates")
     table.add_row("/clear", "Reset conversation history and reload system prompt")
@@ -95,20 +96,20 @@ def run_vault_lint(target_dir: str) -> None:
         broken_table.add_column("Source Note", style="yellow")
         broken_table.add_column("Target Link", style="red")
         for src, tgt in report.broken_links[:10]:
-            broken_table.add_row(src, f"[[{tgt}]]")
+            broken_table.add_row(escape(src), escape(f"[[{tgt}]]"))
         console.print(broken_table)
 
     # Orphan pages details
     if report.orphan_pages:
         console.print("\n[bold yellow]📌 Orphan Pages (no incoming links):[/bold yellow]")
         for orphan in report.orphan_pages[:10]:
-            console.print(f"  - {orphan}")
+            console.print(f"  - {escape(orphan)}")
 
     # Open questions
     if report.open_questions:
         console.print("\n[bold cyan]❓ Unresolved Open Questions:[/bold cyan]")
         for src, q in report.open_questions[:10]:
-            console.print(f"  - [dim]{src}:[/dim] {q}")
+            console.print(f"  - [dim]{escape(src)}:[/dim] {escape(q)}")
     console.print()
 
 
@@ -213,7 +214,10 @@ def run_cli(
                 continue
 
             def on_tool_start(tc: ToolCall) -> None:
-                console.print(f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{tc.name}[/yellow] [dim]{tc.arguments}[/dim]")
+                console.print(
+                    f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{escape(tc.name)}[/yellow] "
+                    f"[dim]{escape(str(tc.arguments))}[/dim]"
+                )
 
             # Run ReAct Loop with animated status
             with console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots"):
