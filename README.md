@@ -92,7 +92,8 @@ project/group-11/
 
 ### 2. Local Setup
 ```bash
-# Navigate to the project directory
+# Clone the repository and navigate to the project directory
+git clone <repository-url>
 cd project/group-11
 
 # Create and activate a Python 3.12 virtual environment
@@ -120,7 +121,17 @@ Edit `.env`:
 INNKUBE_API_KEY=your_innkube_token_here
 ```
 
-### 4. Running StudyMate
+### 4. Add Your Study Materials
+`workspace/data/` and `workspace/artifacts/` aren't tracked in git (they start empty), so on a fresh
+clone you need to create them yourself before running StudyMate locally (the Docker image creates them
+automatically at build time):
+```bash
+mkdir -p workspace/data workspace/artifacts
+```
+Then drop your lecture slides, notes, or PDFs into `workspace/data/` — this is the **read-only** source
+StudyMate ingests from. Generated notes will be written to `workspace/artifacts/`.
+
+### 5. Running StudyMate
 Once installed, launch the interactive agent terminal using:
 ```bash
 studymate
@@ -128,6 +139,7 @@ studymate
 
 #### Interactive Commands in REPL:
 - `/help` — Display command guide
+- `/ingest [path]` — Ingest source files (defaults to `workspace/data/`) into Obsidian concept notes + lecture summary
 - `/lint [path]` — Run knowledge graph health check on study artifacts
 - `/grill <topic>` — Launch an interactive Socratic sparring session on a topic
 - `/templates` — Display standard Obsidian markdown templates
@@ -137,9 +149,46 @@ studymate
 
 ---
 
+## Usage Example
+
+A typical session: point the agent at your lecture material, let it build the knowledge base, then
+check the vault's health.
+
+```
+$ studymate
+
+  🎓 Welcome to StudyMate
+  Model: qwen-agentworld-35b-a3b  Endpoint: https://llms.innkube.fim.uni-passau.de
+  Type your question or study goal. Type /help for commands or /exit to quit.
+
+student > /ingest workspace/data
+📥 Ingesting source material from 'workspace/data'...
+
+  ⚙ Action: list_files {'path': 'workspace/data'}
+  ⚙ Action: read_file {'path': 'workspace/data/lecture01.pdf'}
+  ⚙ Action: write_file {'path': 'workspace/artifacts/lecture-lecture01.md', ...}
+  ⚙ Action: write_file {'path': 'workspace/artifacts/concept-dynamic-programming.md', ...}
+
+I've ingested lecture01.pdf and created lecture-lecture01.md, cross-linked to
+concept-dynamic-programming.md via [[wikilinks]].
+
+student > /lint
+Vault Health Report: workspace/artifacts
+  Total Markdown Notes: 2   Broken Wikilinks: 0 (Clean)   Orphan Pages: 0
+
+student > /grill Dynamic Programming
+🥊 Launching Socratic Grilling Session on 'Dynamic Programming'...
+Define the optimal substructure property. Be precise — no hand-waving.
+
+student > /exit
+Goodbye and happy studying! 🎓
+```
+
+---
+
 ## Testing
 
-Execute the automated test suite with pytest (31 unit and E2E tests):
+Execute the automated test suite with pytest (58 unit and E2E tests):
 ```bash
 # Run all tests
 pytest
@@ -181,7 +230,7 @@ docker run -it --rm \
   - Sandboxed tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`)
   - Strict security boundaries (workspace path jail, read-only data, delete strictly prohibited)
   - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
-  - 31 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, and study ingestion workflows)
+  - 58 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, the CLI REPL, and study ingestion workflows)
   - Containerization with `Dockerfile` and `compose.yaml`
 - [ ] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
   - Dynamic MCP client integration and runtime tool discovery
