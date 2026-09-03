@@ -198,7 +198,9 @@ def run_cli(
                 user_input = (
                     f"Ingest the source material located at '{source_path}'. "
                     f"List all files in that directory first, then read each file, "
-                    f"and for each one: write a lecture summary note and create individual "
+                    "For PDF files, use read_pdf repeatedly in page ranges until every page "
+                    "has been read; one read_pdf call only reads a limited page range. "
+                    "For each source file, write a lecture summary note and create individual "
                     f"concept notes for every key concept mentioned. "
                     f"Save lecture summaries as '{artifacts_path}/lecture-<slug>.md' "
                     f"and concept notes as '{artifacts_path}/concept-<slug>.md'. "
@@ -239,8 +241,10 @@ def run_cli(
             console.print()
             if result.final_response:
                 console.print(Markdown(result.final_response))
+            elif not result.is_success:
+                console.print(f"[bold red]Ingestion stopped:[/bold red] {result.error_message or 'The agent did not return a response.'}")
             else:
-                console.print("[dim](No text response)[/dim]")
+                console.print("[bold red]The agent stopped without returning a response. Please try /ingest again.[/bold red]")
             console.print()
 
         except (KeyboardInterrupt, EOFError):
