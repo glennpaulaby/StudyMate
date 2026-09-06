@@ -11,8 +11,10 @@ def test_default_config_loading():
     assert config.agent.name == "StudyMate"
     assert config.llm.model == "qwen-agentworld-35b-a3b"
     assert config.llm.temperature == 0.2
-    assert config.agent.max_iterations == 15
+    assert config.agent.max_iterations == 50
     assert config.tools.filesystem.allow_delete is False
+    assert config.memory.enabled is True
+    assert config.memory.db_path == "./workspace/artifacts/memory/memory.db"
 
 
 def test_yaml_config_loading(tmp_path: Path):

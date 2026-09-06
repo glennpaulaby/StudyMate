@@ -15,7 +15,7 @@ class LLMConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Configuration for the StudyMate agent core behavior and paths."""
     name: str = Field(default="StudyMate", description="Agent persona name")
-    max_iterations: int = Field(default=60, ge=1, le=50, description="Max ReAct loop iterations")
+    max_iterations: int = Field(default=50, ge=1, le=50, description="Max ReAct loop iterations")
     system_prompt_path: str = Field(default="config/soul.md", description="Path to agent persona directives")
     workspace_dir: str = Field(default="./workspace", description="Root sandbox directory")
     data_dir: str = Field(default="./workspace/data", description="Read-only source documents directory")
@@ -35,6 +35,16 @@ class ToolsConfig(BaseModel):
     filesystem: FilesystemToolConfig = Field(default_factory=FilesystemToolConfig)
 
 
+class MemoryConfig(BaseModel):
+    """Persistent chat-thread memory (SQLite episodic store)."""
+    enabled: bool = Field(default=True, description="Whether thread persistence is active")
+    db_path: str = Field(
+        default="./workspace/artifacts/memory/memory.db",
+        description="SQLite file (must stay inside allowed_write jail)",
+    )
+    max_load: int = Field(default=50, ge=1, le=200, description="Max past messages reloaded on thread enter")
+
+
 class ObservabilityConfig(BaseModel):
     """Logging and Prometheus telemetry settings."""
     log_level: str = Field(default="INFO", description="Logging verbosity")
@@ -47,4 +57,5 @@ class AppConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)

@@ -76,6 +76,14 @@ class ContextManager:
         """Returns the full conversation message history."""
         return self.messages
 
+    def load_history(self, history: List[ChatMessage]) -> None:
+        """Replaces in-memory history with persisted thread messages (keeps system prompt)."""
+        system_msg = self.messages[0] if self.messages and self.messages[0].role == Role.SYSTEM else None
+        if system_msg is None:
+            self._init_system_prompt()
+            system_msg = self.messages[0]
+        self.messages = [system_msg] + list(history or [])
+
     def clear(self, keep_system_prompt: bool = True) -> None:
         """Resets conversation history."""
         if keep_system_prompt:
