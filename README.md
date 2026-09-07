@@ -23,6 +23,9 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
   - `workspace/artifacts/`: **Read, Write, and Edit** (where generated study artifacts reside).
   - **No Deletion Guarantee**: The agent is strictly prohibited from deleting any files or directories across all paths.
   - **Jail Containment**: All file operations are sandboxed strictly within `./workspace/`; directory traversal outside this boundary is rejected.
+- **MCP Research and Obsidian Tools**:
+  - `research_topic` aggregates deduplicated internet sources for a study topic.
+  - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`, and `obsidian_append_note` manage a configured vault without deletion.
 
 ---
 
@@ -64,7 +67,8 @@ project/group-11/
 │       ├── config/             # Configuration schemas and YAML/env loader
 │       ├── core/               # ReAct loop, context manager, and state machine
 │       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
-│       ├── tools/              # Tool registry and sandboxed filesystem & PDF tools
+│       ├── tools/              # Tool registry, filesystem/PDF tools, and MCP capabilities
+│       │   └── mcp/            # Internet research + Obsidian MCP server and adapters
 │       ├── study/              # Obsidian templates, VaultLinter, and SocraticGriller
 │       ├── memory/             # Persistent long-term memory (Week 2)
 │       ├── observability/      # Prometheus telemetry & lifecycle hooks (Week 3)
@@ -135,6 +139,14 @@ StudyMate ingests from. Generated notes will be written to `workspace/artifacts/
 Once installed, launch the interactive agent terminal using:
 ```bash
 studymate
+```
+
+The MCP server can be launched over stdio for an MCP host. Set `OBSIDIAN_VAULT_PATH`
+to override the vault directory; it defaults to the project `workspace/` directory:
+
+```powershell
+$env:OBSIDIAN_VAULT_PATH = "C:\path\to\your\vault"
+python -m study_agent.tools.mcp.server
 ```
 
 #### Interactive Commands in REPL:
@@ -232,9 +244,10 @@ docker run -it --rm \
   - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
   - 58 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, the CLI REPL, and study ingestion workflows)
   - Containerization with `Dockerfile` and `compose.yaml`
-- [ ] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
-  - Dynamic MCP client integration and runtime tool discovery
-  - Custom non-trivial MCP tool extension
+- [x] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
+  - Internet research aggregation and safe Obsidian vault MCP tools
+  - Local ToolRegistry bridge for agent access plus stdio MCP server
+  - Dynamic MCP client integration and persistent long-term memory remain next steps
   - Persistent long-term memory across sessions
 - [ ] **Week 3: Observability, Permissions, and Sub-Agents**
   - Prometheus metrics instrumentation and dashboard

@@ -30,9 +30,21 @@ class FilesystemToolConfig(BaseModel):
     allowed_write_paths: List[str] = Field(default_factory=lambda: ["./workspace/artifacts"], description="Paths permitted for writing")
 
 
+class MCPToolConfig(BaseModel):
+    """Configuration for internet research and Obsidian MCP tools."""
+    enabled: bool = Field(default=True, description="Whether MCP-backed tools are registered")
+    vault_path: str = Field(default="./workspace/", description="Obsidian vault path")
+    search_endpoint: str = Field(
+        default="https://html.duckduckgo.com/html/",
+        description="HTML search endpoint used by the research tool",
+    )
+    max_results: int = Field(default=5, ge=1, le=10, description="Maximum research sources returned")
+
+
 class ToolsConfig(BaseModel):
     """Container for all tool category configurations."""
     filesystem: FilesystemToolConfig = Field(default_factory=FilesystemToolConfig)
+    mcp: MCPToolConfig = Field(default_factory=MCPToolConfig)
 
 
 class ObservabilityConfig(BaseModel):

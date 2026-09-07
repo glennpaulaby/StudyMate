@@ -26,10 +26,12 @@ from study_agent.core.types import ToolCall
 from study_agent.llm.base import BaseLLMClient
 from study_agent.llm.client import OpenAICompatibleLLMClient
 from study_agent.study.griller import SocraticGriller
-from study_agent.study.linter import VaultLinter
+from study_agent.study.linter import VaultLintReport, VaultLinter
 from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
 from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
+from study_agent.tools.mcp import register_mcp_tools
+from study_agent.tools.mcp.services import WebResearchService
 
 console = Console()
 
@@ -53,7 +55,7 @@ def print_help() -> None:
     table.add_column("Description", style="white")
     table.add_row("/help", "Show this help table")
     table.add_row(escape("/ingest [path]"), "Ingest source files and generate Obsidian concept notes + lecture summary")
-    table.add_row(escape("/lint [path]"), "Run vault health check (broken links, orphans, open questions)")
+    table.add_row(escape("/lint [path]"), "Lint the vault and automatically repair broken links and formatting issues")
     table.add_row("/grill <topic>", "Launch an interactive Socratic grilling sparring session")
     table.add_row("/templates", "Display standard Obsidian markdown templates")
     table.add_row("/clear", "Reset conversation history and reload system prompt")
@@ -62,10 +64,30 @@ def print_help() -> None:
     console.print(table)
 
 
-def run_vault_lint(target_dir: str) -> None:
-    """Executes vault health check and prints a structured Rich summary."""
+def run_vault_lint(
+    target_dir: str,
+    engine: Optional[AgentEngine] = None,
+    context: Optional[ContextManager] = None,
+) -> None:
+    """Lint a vault and ask the agent to repair detected integrity errors."""
     linter = VaultLinter(target_dir)
     with console.status("[bold green]Linting vault knowledge graph...[/bold green]"):
+        report = linter.lint()
+
+    if (report.broken_links or report.metadata_issues) and engine and context:
+        repair_prompt = _build_lint_repair_prompt(target_dir, report)
+        console.print(
+            "[bold yellow]⚙ Lint errors found. StudyMate is attempting automatic repairs...[/bold yellow]"
+        )
+        with console.status("[bold green]Repairing vault issues...[/bold green]"):
+            repair_result = engine.run(repair_prompt, context)
+        if repair_result.is_success:
+            console.print("[green]✓ Automatic repair pass completed.[/green]")
+        else:
+            console.print(
+                f"[bold red]Automatic repair stopped:[/bold red] "
+                f"{repair_result.error_message or 'No repair summary was produced.'}"
+            )
         report = linter.lint()
 
     console.print()
@@ -85,6 +107,9 @@ def run_vault_lint(target_dir: str) -> None:
     broken_style = "[green]0 (Clean)[/green]" if len(report.broken_links) == 0 else f"[red]{len(report.broken_links)} Broken[/red]"
     summary.add_row("Broken Wikilinks", str(len(report.broken_links)), broken_style)
 
+    metadata_style = "[green]0 (Clean)[/green]" if len(report.metadata_issues) == 0 else f"[red]{len(report.metadata_issues)} Issues[/red]"
+    summary.add_row("Formatting / Metadata Issues", str(len(report.metadata_issues)), metadata_style)
+
     orphan_style = "[green]0[/green]" if len(report.orphan_pages) == 0 else f"[yellow]{len(report.orphan_pages)} Orphans[/yellow]"
     summary.add_row("Orphan Pages", str(len(report.orphan_pages)), orphan_style)
 
@@ -100,6 +125,14 @@ def run_vault_lint(target_dir: str) -> None:
             broken_table.add_row(escape(src), escape(f"[[{tgt}]]"))
         console.print(broken_table)
 
+    if report.metadata_issues:
+        metadata_table = Table(title="⚠️ Formatting / Metadata Issues", show_header=True, header_style="bold red")
+        metadata_table.add_column("Note", style="yellow")
+        metadata_table.add_column("Issue", style="red")
+        for source, issue in report.metadata_issues[:10]:
+            metadata_table.add_row(escape(source), escape(issue))
+        console.print(metadata_table)
+
     # Orphan pages details
     if report.orphan_pages:
         console.print("\n[bold yellow]📌 Orphan Pages (no incoming links):[/bold yellow]")
@@ -112,6 +145,29 @@ def run_vault_lint(target_dir: str) -> None:
         for src, q in report.open_questions[:10]:
             console.print(f"  - [dim]{escape(src)}:[/dim] {escape(q)}")
     console.print()
+
+
+def _build_lint_repair_prompt(target_dir: str, report: VaultLintReport) -> str:
+    """Build a constrained repair request from a lint report."""
+    issues = []
+    for source, target in report.broken_links:
+        issues.append(f"- Broken wikilink in '{source}': [[{target}]]")
+    for source, description in report.metadata_issues:
+        issues.append(f"- Formatting/frontmatter issue in '{source}': {description}")
+
+    return (
+        f"Repair the detected integrity errors in the Markdown vault at '{target_dir}'. "
+        "Read each affected note before editing. Fix only the listed broken wikilinks "
+        "and formatting/frontmatter issues. For broken wikilinks, link to an existing "
+        "note when the intended target is unambiguous; otherwise remove only the broken "
+        "link syntax and preserve the surrounding meaning. For frontmatter issues, "
+        "preserve existing metadata and add only the required missing fields using the "
+        "vault's established note format. Use edit_file for precise changes and write_file "
+        "only when necessary. Do not delete files, invent notes, rewrite unrelated content, "
+        "or modify orphan status. After editing, report the files changed.\n\n"
+        "Detected issues:\n"
+        + "\n".join(issues)
+    )
 
 
 def print_templates() -> None:
@@ -152,8 +208,8 @@ def run_cli(
     context = ContextManager(system_prompt_path=app_config.agent.system_prompt_path)
 
     registry = tool_registry or ToolRegistry()
+    project_root = Path.cwd().resolve()
     if tool_registry is None and app_config.tools.filesystem.enabled:
-        project_root = Path.cwd().resolve()
         workspace_root = (project_root / app_config.agent.workspace_dir).resolve()
         register_filesystem_tools(
             registry,
@@ -161,6 +217,18 @@ def run_cli(
             config=app_config.tools.filesystem,
             workspace_root=workspace_root,
         )
+    if tool_registry is None and app_config.tools.mcp.enabled:
+        configured_vault = app_config.tools.mcp.vault_path
+        vault_path = Path(configured_vault)
+        if not vault_path.is_absolute():
+            vault_path = (project_root / vault_path).resolve()
+        if vault_path.is_dir():
+            register_mcp_tools(
+                registry,
+                vault_path=vault_path,
+                search_service=WebResearchService(app_config.tools.mcp.search_endpoint),
+                max_results=app_config.tools.mcp.max_results,
+            )
 
     engine = AgentEngine(llm_client=client, tool_registry=registry, config=app_config.agent)
 
@@ -192,7 +260,7 @@ def run_cli(
             elif user_input.lower().startswith("/lint"):
                 parts = user_input.split(maxsplit=1)
                 target_path = parts[1] if len(parts) > 1 else app_config.agent.artifacts_dir
-                run_vault_lint(target_path)
+                run_vault_lint(target_path, engine=engine, context=context)
                 continue
             elif user_input.lower().startswith("/grill"):
                 parts = user_input.split(maxsplit=1)

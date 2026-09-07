@@ -10,6 +10,11 @@ from study_agent.tools.filesystem import (
     EditFileTool,
     register_filesystem_tools,
 )
+from study_agent.tools.mcp import (
+    ObsidianVaultService,
+    WebResearchService,
+    register_mcp_tools,
+)
 
 __all__ = [
     "BaseTool",
@@ -23,5 +28,7 @@ __all__ = [
     "SearchTextTool",
     "EditFileTool",
     "register_filesystem_tools",
+    "ObsidianVaultService",
+    "WebResearchService",
+    "register_mcp_tools",
 ]
-
