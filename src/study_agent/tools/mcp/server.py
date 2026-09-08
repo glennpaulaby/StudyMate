@@ -23,9 +23,15 @@ def create_mcp_server(
 
     @server.tool()
     def research_topic(
-        topic: str, max_results: int = 5, domains: list[str] | None = None
+        topic: str,
+        max_results: int = 5,
+        domains: list[str] | None = None,
+        depth: int = 1,
+        max_pages: int = 10,
     ) -> str:
-        """Search the internet and aggregate deduplicated sources for a study topic."""
+        """Search multiple websites and optionally dive into linked pages."""
+        if depth:
+            return research.deep_search(topic, max_results, domains, depth, max_pages)
         return research.search(topic, max_results, domains)
 
     @server.tool()
@@ -47,6 +53,11 @@ def create_mcp_server(
     def obsidian_write_note(path: str, content: str, overwrite: bool = False) -> str:
         """Create or explicitly overwrite a Markdown note. Deletion is not supported."""
         return vault.write_note(path, content, overwrite)
+
+    @server.tool()
+    def obsidian_edit_note(path: str, target: str, replacement: str) -> str:
+        """Replace one unique text fragment in an existing Markdown note."""
+        return vault.edit_note(path, target, replacement)
 
     @server.tool()
     def obsidian_append_note(path: str, content: str) -> str:

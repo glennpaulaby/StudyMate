@@ -22,7 +22,7 @@ class ResearchTopicTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Search the internet for a study topic and return deduplicated sources with titles, URLs, and snippets."
+        return "Search multiple websites for a study topic and optionally follow same-site links for deeper context."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -39,7 +39,21 @@ class ResearchTopicTool(BaseTool):
                 "domains": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional domains to restrict results to",
+                    "description": "Optional domains; each domain is searched independently",
+                },
+                "depth": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2,
+                    "default": 1,
+                    "description": "Same-site link depth; 0 returns search results only",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10,
+                    "description": "Maximum pages to fetch per source during deep research",
                 },
             },
             "required": ["topic"],
@@ -50,8 +64,14 @@ class ResearchTopicTool(BaseTool):
         topic: str,
         max_results: int | None = None,
         domains: list[str] | None = None,
+        depth: int = 1,
+        max_pages: int = 10,
         **kwargs: Any,
     ) -> str:
+        if depth:
+            return self.service.deep_search(
+                topic, max_results or self.max_results, domains, depth, max_pages
+            )
         return self.service.search(topic, max_results or self.max_results, domains)
 
 
@@ -179,6 +199,36 @@ class AppendNoteTool(_VaultTool):
         return self.service.append_note(path, content)
 
 
+class EditNoteTool(_VaultTool):
+    @property
+    def name(self) -> str:
+        return "obsidian_edit_note"
+
+    @property
+    def description(self) -> str:
+        return "Replace one unique text fragment in an existing Markdown note."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "Exact existing text; it must occur exactly once",
+                },
+                "replacement": {"type": "string"},
+            },
+            "required": ["path", "target", "replacement"],
+        }
+
+    def execute(
+        self, path: str, target: str, replacement: str, **kwargs: Any
+    ) -> str:
+        return self.service.edit_note(path, target, replacement)
+
+
 def register_mcp_tools(
     registry: ToolRegistry,
     vault_path: str | Path,
@@ -195,3 +245,4 @@ def register_mcp_tools(
     registry.register(SearchNotesTool(vault))
     registry.register(WriteNoteTool(vault))
     registry.register(AppendNoteTool(vault))
+    registry.register(EditNoteTool(vault))

@@ -24,8 +24,13 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
   - **No Deletion Guarantee**: The agent is strictly prohibited from deleting any files or directories across all paths.
   - **Jail Containment**: All file operations are sandboxed strictly within `./workspace/`; directory traversal outside this boundary is rejected.
 - **MCP Research and Obsidian Tools**:
-  - `research_topic` aggregates deduplicated internet sources for a study topic.
-  - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`, and `obsidian_append_note` manage a configured vault without deletion.
+  - `research_topic` performs Perplexity-style multi-source research: it aggregates
+    deduplicated sources, fetches relevant same-site pages, and returns cited page
+    evidence. Set `depth=0` for search-only results or provide `domains` to search
+    selected websites independently.
+  - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`,
+    `obsidian_edit_note`, and `obsidian_append_note` support filesystem-first note-taking,
+    including anchored edits and `[[wikilinks]]`, without deletion.
 
 ---
 
