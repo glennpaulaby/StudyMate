@@ -53,7 +53,8 @@ def load_config(
     config = AppConfig(**yaml_data)
     
     # 5. Inject API Key securely from environment if not explicitly set
+    # One key covers chat, embeddings, and rerank (granted per model server-side).
     if not config.llm.api_key:
         config.llm.api_key = os.getenv("INNKUBE_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-        
+
     return config

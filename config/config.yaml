@@ -11,6 +11,8 @@ llm:
   max_tokens: 2048
   base_url: "https://llms.innkube.fim.uni-passau.de"
   timeout: 60.0
+  embedding_model: "octen-embedding-8b"
+  reranker_model: "qwen3-reranker-4b"
   # NOTE: Do NOT put API tokens here. Set the INNKUBE_API_KEY environment variable.
 
 agent:
@@ -35,6 +37,7 @@ memory:
   enabled: true
   db_path: "./workspace/artifacts/memory/memory.db"
   max_load: 50
+  max_inject: 5
 
 observability:
   log_level: "INFO"

@@ -23,22 +23,32 @@ class ContextManager:
         self.system_prompt_path = Path(system_prompt_path) if system_prompt_path else None
         self._custom_system_prompt = custom_system_prompt
         self.messages: List[ChatMessage] = []
+        self._base_system = ""
+        self._injected_note: Optional[str] = None
         self._init_system_prompt()
+
+    def _render_system_message(self) -> ChatMessage:
+        """Builds the single leading SYSTEM message (base prompt + injected note)."""
+        content = self._base_system
+        if self._injected_note:
+            content = f"{content}\n\n---\n{self._injected_note}"
+        return ChatMessage(role=Role.SYSTEM, content=content)
 
     def _init_system_prompt(self) -> None:
         """Loads the system prompt from file or fallback default."""
         system_content = self._custom_system_prompt
-        
+
         if not system_content and self.system_prompt_path and self.system_prompt_path.exists():
             try:
                 system_content = self.system_prompt_path.read_text(encoding="utf-8").strip()
             except Exception:
                 system_content = DEFAULT_SYSTEM_PROMPT
-                
+
         if not system_content:
             system_content = DEFAULT_SYSTEM_PROMPT
-            
-        self.messages = [ChatMessage(role=Role.SYSTEM, content=system_content)]
+
+        self._base_system = system_content
+        self.messages = [self._render_system_message()]
 
     def add_user_message(self, content: str) -> ChatMessage:
         """Appends a user input turn to the context."""
@@ -83,6 +93,22 @@ class ContextManager:
             self._init_system_prompt()
             system_msg = self.messages[0]
         self.messages = [system_msg] + list(history or [])
+
+    def inject_system_note(self, content: str) -> Optional[ChatMessage]:
+        """Merges a small high-value note (e.g. memory facts) into the leading SYSTEM message.
+
+        A second SYSTEM entry breaks strict chat templates (vLLM/LiteLLM 400:
+        "System message must be at the beginning"), so the note is folded into
+        messages[0] instead of appended. Replaces any previous note.
+        """
+        if not (content or "").strip():
+            return None
+        self._injected_note = content.strip()
+        if self.messages and self.messages[0].role == Role.SYSTEM:
+            self.messages[0] = self._render_system_message()
+        else:  # pragma: no cover - defensive; messages[0] is always SYSTEM
+            self._init_system_prompt()
+        return self.messages[0]
 
     def clear(self, keep_system_prompt: bool = True) -> None:
         """Resets conversation history."""

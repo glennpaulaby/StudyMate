@@ -10,6 +10,8 @@ class LLMConfig(BaseModel):
     base_url: str = Field(default="https://llms.innkube.fim.uni-passau.de", description="OpenAI-compatible endpoint")
     timeout: float = Field(default=60.0, ge=1.0, description="Request timeout in seconds")
     api_key: str = Field(default="", description="API key (injected from environment)")
+    embedding_model: str = Field(default="octen-embedding-8b", description="Embedding model for semantic fact recall")
+    reranker_model: str = Field(default="qwen3-reranker-4b", description="Reranker model for hybrid fact ordering")
 
 
 class AgentConfig(BaseModel):
@@ -43,6 +45,7 @@ class MemoryConfig(BaseModel):
         description="SQLite file (must stay inside allowed_write jail)",
     )
     max_load: int = Field(default=50, ge=1, le=200, description="Max past messages reloaded on thread enter")
+    max_inject: int = Field(default=5, ge=0, le=20, description="Top-N recent facts auto-injected at session start")
 
 
 class ObservabilityConfig(BaseModel):

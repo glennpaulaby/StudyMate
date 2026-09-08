@@ -25,8 +25,11 @@ from study_agent.core.engine import AgentEngine
 from study_agent.core.types import ToolCall
 from study_agent.llm.base import BaseLLMClient
 from study_agent.llm.client import OpenAICompatibleLLMClient
+from study_agent.memory.embeddings import Embedder, InnKubeEmbedder
+from study_agent.memory.rerank import InnKubeReranker, Reranker
 from study_agent.memory.store import MemoryStore
 from study_agent.memory.threads import generate_thread_name, resolve_thread
+from study_agent.memory.tools import register_memory_tools
 from study_agent.study.griller import SocraticGriller
 from study_agent.study.linter import VaultLinter
 from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
@@ -435,6 +438,34 @@ def run_cli(
         except Exception as e:
             console.print(f"[yellow]Memory disabled (DB init failed): {e}[/yellow]")
             memory_store = None
+    embedder: Optional[Embedder] = None
+    reranker: Optional[Reranker] = None
+    if memory_store is not None and app_config.llm.api_key:
+        try:
+            embedder = InnKubeEmbedder(
+                api_key=app_config.llm.api_key,
+                base_url=app_config.llm.base_url,
+                model=app_config.llm.embedding_model,
+                timeout=app_config.llm.timeout,
+            )
+            reranker = InnKubeReranker(
+                api_key=app_config.llm.api_key,
+                base_url=app_config.llm.base_url,
+                model=app_config.llm.reranker_model,
+                timeout=app_config.llm.timeout,
+            )
+        except Exception as e:
+            console.print(f"[yellow]Semantic recall disabled (embedder init failed): {e}[/yellow]")
+            embedder = None
+            reranker = None
+    register_memory_tools(registry, memory_store, embedder, reranker)
+    if memory_store is not None and app_config.memory.max_inject > 0:
+        recent_facts = memory_store.recall_facts("", limit=app_config.memory.max_inject)
+        if recent_facts:
+            lines = ["Relevant long-term memory (persisted facts, most recent first):"]
+            lines += [f"- [{f.topic}] {f.fact}" for f in recent_facts]
+            lines.append("Use memory_recall to search all facts just-in-time when personalizing.")
+            context.inject_system_note("\n".join(lines))
     active_thread_id: Optional[str] = None
 
     def ensure_thread(first_text: str) -> Optional[str]:

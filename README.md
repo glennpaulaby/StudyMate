@@ -143,9 +143,23 @@ studymate
 - `/lint [path]` — Run knowledge graph health check on study artifacts
 - `/grill <topic>` — Launch an interactive Socratic sparring session on a topic
 - `/templates` — Display standard Obsidian markdown templates
-- `/clear` — Reset conversation history
+- `/threads` — Browse previous chat threads (↑/↓ + Enter, paged)
+- `/thread <#|id|name>` — Enter/continue a previous thread (transcript restored)
+- `/new [name]` — Start a new thread (default on first message)
+- `/archive-this` — Archive the current thread (tombstone, no delete)
+- `/archive-all` — Archive ALL threads (asks for confirmation)
+- `/clear` — Reset in-memory history (thread history stays saved)
 - `/config` — View active runtime settings
 - `/exit, /quit` — Quit StudyMate
+
+#### Long-Term Memory:
+Chat threads persist across restarts in `workspace/artifacts/memory/memory.db`
+(SQLite). Durable facts (preferences, struggles) are stored via the agent's
+`memory_store` tool and retrieved hybrid: exact keyword matches first, then
+meaning-similar hits via `sqlite-vector` cosine search, reordered by the
+InnKube reranker (`memory_recall`). One API key covers chat, embeddings,
+and rerank (granted per model server-side). Top recent facts auto-inject
+at session start. All memory writes are append-only — nothing is ever deleted.
 
 ---
 
@@ -188,7 +202,7 @@ Goodbye and happy studying! 🎓
 
 ## Testing
 
-Execute the automated test suite with pytest (58 unit and E2E tests):
+Execute the automated test suite with pytest (109 unit and E2E tests):
 ```bash
 # Run all tests
 pytest

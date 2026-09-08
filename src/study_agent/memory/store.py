@@ -26,6 +26,17 @@ class ThreadRecord(BaseModel):
     archived: bool = Field(default=False, description="Tombstone flag; archived threads are hidden, never deleted")
 
 
+class FactRecord(BaseModel):
+    """Persistent semantic fact (user preference or learned fact)."""
+    id: int = Field(description="Auto-increment fact identifier")
+    topic: str = Field(description="Short topic label (e.g. 'dijkstra', 'study-preferences')")
+    fact: str = Field(description="The durable fact text")
+    tags: List[str] = Field(default_factory=list, description="Search tags")
+    source_thread: Optional[str] = Field(default=None, description="Thread id where the fact emerged")
+    created_at: str = Field(description="ISO creation timestamp")
+    archived: bool = Field(default=False, description="Tombstone flag; archived facts are hidden, never deleted")
+
+
 class MemoryStore:
     """
     SQLite-backed episodic store for chat threads.
@@ -41,6 +52,39 @@ class MemoryStore:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._init_db()
+        # Extension load is per-connection; failure degrades to LIKE-only recall.
+        from study_agent.memory.embeddings import load_sqlite_vector
+
+        self.vector_available: bool = load_sqlite_vector(self._conn)
+        self._vector_inited_for: Optional[str] = None
+
+    def _ensure_vector_init(self, model: str) -> bool:
+        """Runs vector_init for the active embedding model; False when unusable.
+
+        The dimension is read from vector_meta (recorded at store time), so a
+        model rotation never misreads old vectors — stale rows are simply
+        invisible to the vector query (LIKE still sees them).
+        """
+        if not self.vector_available:
+            return False
+        if self._vector_inited_for == model:
+            return True
+        row = self._conn.execute(
+            "SELECT dim FROM vector_meta WHERE model = ?", (model,)
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            self._conn.execute(
+                "SELECT vector_init('facts', 'embedding', ?)",
+                (f"type=FLOAT32,dimension={int(row['dim'])},distance=COSINE",),
+            )
+        except Exception as e:
+            logger.warning(f"vector_init failed, vector recall disabled: {e}")
+            self.vector_available = False
+            return False
+        self._vector_inited_for = model
+        return True
 
     def _table_columns(self, table: str) -> List[str]:
         """Returns existing column names for a table (for migrations)."""
@@ -85,6 +129,35 @@ class MemoryStore:
                 )
                 """
             )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS facts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT NOT NULL,
+                    fact TEXT NOT NULL,
+                    tags TEXT NOT NULL DEFAULT '',
+                    source_thread TEXT,
+                    created_at TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    embedding BLOB,
+                    embedding_model TEXT,
+                    UNIQUE(topic, fact)
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vector_meta (
+                    model TEXT PRIMARY KEY,
+                    dim INTEGER NOT NULL
+                )
+                """
+            )
+            # Migrate pre-vector DBs (CREATE TABLE IF NOT EXISTS won't alter them).
+            if "embedding" not in self._table_columns("facts"):
+                self._conn.execute("ALTER TABLE facts ADD COLUMN embedding BLOB")
+            if "embedding_model" not in self._table_columns("facts"):
+                self._conn.execute("ALTER TABLE facts ADD COLUMN embedding_model TEXT")
             # Migrate pre-archive DBs (CREATE TABLE IF NOT EXISTS won't alter them).
             if "archived" not in self._table_columns("threads"):
                 self._conn.execute("ALTER TABLE threads ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
@@ -290,6 +363,205 @@ class MemoryStore:
             (thread_id,),
         ).fetchone()
         return int(row["n"]) if row else 0
+
+    @staticmethod
+    def _row_to_fact(row: sqlite3.Row) -> FactRecord:
+        """Converts a DB row (comma tags, INTEGER archived) to a FactRecord."""
+        data = dict(row)
+        data["tags"] = [t for t in (data.get("tags") or "").split(",") if t]
+        data["archived"] = bool(data.get("archived", 0))
+        return FactRecord(**data)
+
+    def store_fact(
+        self,
+        topic: str,
+        fact: str,
+        tags: Optional[List[str]] = None,
+        source_thread: Optional[str] = None,
+        embedding: Optional[bytes] = None,
+        embedding_model: Optional[str] = None,
+    ) -> tuple[FactRecord, bool]:
+        """Stores a fact; exact (topic, fact) duplicates revive instead of duplicating.
+
+        Returns (record, created). Whole unit (lookup + insert-or-revive) runs
+        in one transaction; UNIQUE(topic, fact) is the backstop against races.
+        Pass embedding (+model) to make the row visible to vector recall;
+        rows without one stay LIKE-only. Duplicate stores fill in a missing
+        embedding and record the vector space in vector_meta.
+        """
+        topic = (topic or "").strip()
+        fact = (fact or "").strip()
+        if not topic or not fact:
+            raise ValueError("Both topic and fact must be non-empty.")
+        if len(fact) > 2000:
+            raise ValueError("Fact text exceeds 2000 characters; shorten it.")
+        if (embedding is None) != (embedding_model is None):
+            raise ValueError("embedding and embedding_model must be given together.")
+        tags_str = ",".join(t.strip().lower() for t in (tags or []) if t.strip())
+        with self._conn:
+            if embedding is not None:
+                from study_agent.memory.embeddings import embedding_dim
+
+                self._conn.execute(
+                    "INSERT INTO vector_meta (model, dim) VALUES (?, ?) "
+                    "ON CONFLICT(model) DO UPDATE SET dim = excluded.dim",
+                    (embedding_model, embedding_dim(embedding)),
+                )
+            try:
+                cur = self._conn.execute(
+                    "INSERT INTO facts (topic, fact, tags, source_thread, created_at, archived, "
+                    "embedding, embedding_model) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+                    (topic, fact, tags_str, source_thread, _utc_now_iso(), embedding, embedding_model),
+                )
+                row = self._conn.execute(
+                    "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                    "FROM facts WHERE id = ?",
+                    (cur.lastrowid,),
+                ).fetchone()
+                return self._row_to_fact(row), True
+            except sqlite3.IntegrityError:
+                row = self._conn.execute(
+                    "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                    "FROM facts WHERE topic = ? AND fact = ?",
+                    (topic, fact),
+                ).fetchone()
+                if row is None:  # pragma: no cover - defensive; UNIQUE guarantees a row
+                    raise
+                if row["archived"]:
+                    self._conn.execute("UPDATE facts SET archived = 0 WHERE id = ?", (row["id"],))
+                full = self._conn.execute(
+                    "SELECT id, topic, fact, tags, source_thread, created_at, archived, "
+                    "embedding, embedding_model FROM facts WHERE id = ?",
+                    (row["id"],),
+                ).fetchone()
+                if embedding is not None and (
+                    full["embedding"] is None or full["embedding_model"] != embedding_model
+                ):
+                    self._conn.execute(
+                        "UPDATE facts SET embedding = ?, embedding_model = ? WHERE id = ?",
+                        (embedding, embedding_model, row["id"]),
+                    )
+                row = self._conn.execute(
+                    "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                    "FROM facts WHERE id = ?",
+                    (row["id"],),
+                ).fetchone()
+                return self._row_to_fact(row), False
+
+    def recall_facts(self, query: str = "", limit: int = 10, offset: int = 0) -> List[FactRecord]:
+        """Returns one page of non-archived facts, most recent first.
+
+        Empty query lists recent facts; otherwise case-insensitive substring
+        match over topic/fact/tags (same literal semantics as search_text).
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            rows = self._conn.execute(
+                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                "FROM facts WHERE archived = 0 ORDER BY id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        else:
+            like = f"%{q}%"
+            rows = self._conn.execute(
+                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                "FROM facts WHERE archived = 0 AND (lower(topic) LIKE ? OR lower(fact) LIKE ? "
+                "OR lower(tags) LIKE ?) ORDER BY id DESC LIMIT ? OFFSET ?",
+                (like, like, like, limit, offset),
+            ).fetchall()
+        return [self._row_to_fact(r) for r in rows]
+
+    def count_facts(self, query: str = "") -> int:
+        """Returns total non-archived fact count (for paging), optionally filtered."""
+        q = (query or "").strip().lower()
+        if not q:
+            row = self._conn.execute("SELECT COUNT(*) AS n FROM facts WHERE archived = 0").fetchone()
+        else:
+            like = f"%{q}%"
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM facts WHERE archived = 0 AND (lower(topic) LIKE ? "
+                "OR lower(fact) LIKE ? OR lower(tags) LIKE ?)",
+                (like, like, like),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def get_fact(self, fact_id: int, include_archived: bool = False) -> Optional[FactRecord]:
+        """Returns a single fact by id, or None if missing/archived."""
+        if include_archived:
+            row = self._conn.execute(
+                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                "FROM facts WHERE id = ?",
+                (fact_id,),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+                "FROM facts WHERE id = ? AND archived = 0",
+                (fact_id,),
+            ).fetchone()
+        return self._row_to_fact(row) if row else None
+
+    def archive_fact(self, fact_id: int) -> bool:
+        """Tombstones a fact (no deletes). Returns True if a row was hidden."""
+        with self._conn:
+            cur = self._conn.execute(
+                "UPDATE facts SET archived = 1 WHERE id = ? AND archived = 0", (fact_id,)
+            )
+        return cur.rowcount > 0
+
+    def recall_semantic_vector(
+        self, query_blob: bytes, model: str, limit: int = 10, offset: int = 0
+    ) -> List[tuple]:
+        """Vector nearest-neighbors via sqlite-vector (exact scan, cosine).
+
+        Returns [(FactRecord, distance)] ascending by distance. Only rows
+        embedded with `model` participate (stale spaces stay invisible here
+        and remain LIKE-visible). Empty list when the extension is missing,
+        uninitialized, or nothing is embedded yet — callers fall back to LIKE.
+        """
+        if not self._ensure_vector_init(model):
+            return []
+        k = max(1, limit + offset)
+        try:
+            rows = self._conn.execute(
+                "SELECT f.id, f.topic, f.fact, f.tags, f.source_thread, f.created_at, "
+                "f.archived, v.distance FROM vector_full_scan('facts', 'embedding', ?, ?) AS v "
+                "JOIN facts AS f ON f.rowid = v.rowid "
+                "WHERE f.archived = 0 AND f.embedding_model = ?",
+                (query_blob, k, model),
+            ).fetchall()
+        except Exception as e:
+            logger.warning(f"Vector scan failed, falling back to LIKE: {e}")
+            return []
+        page = rows[offset : offset + limit]
+        return [(self._row_to_fact(r), float(r["distance"])) for r in page]
+
+    def get_facts_missing_embeddings(self, model: str, limit: int = 100) -> List[FactRecord]:
+        """Returns non-archived facts lacking a vector for `model` (backfill queue)."""
+        rows = self._conn.execute(
+            "SELECT id, topic, fact, tags, source_thread, created_at, archived "
+            "FROM facts WHERE archived = 0 AND (embedding IS NULL OR embedding_model IS NULL "
+            "OR embedding_model != ?) ORDER BY id ASC LIMIT ?",
+            (model, limit),
+        ).fetchall()
+        return [self._row_to_fact(r) for r in rows]
+
+    def set_fact_embedding(self, fact_id: int, embedding: bytes, model: str) -> bool:
+        """Attaches a vector to a fact; records the vector space in vector_meta."""
+        from study_agent.memory.embeddings import embedding_dim
+
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO vector_meta (model, dim) VALUES (?, ?) "
+                "ON CONFLICT(model) DO UPDATE SET dim = excluded.dim",
+                (model, embedding_dim(embedding)),
+            )
+            cur = self._conn.execute(
+                "UPDATE facts SET embedding = ?, embedding_model = ? "
+                "WHERE id = ? AND archived = 0",
+                (embedding, model, fact_id),
+            )
+        return cur.rowcount > 0
 
     def close(self) -> None:
         """Closes the underlying SQLite connection."""
