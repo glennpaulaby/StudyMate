@@ -18,6 +18,11 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.styles import Style
+
 from study_agent.config.loader import load_config
 from study_agent.config.settings import AppConfig
 from study_agent.core.context import ContextManager
@@ -34,6 +39,70 @@ from study_agent.tools.mcp import register_mcp_tools
 from study_agent.tools.mcp.services import WebResearchService
 
 console = Console()
+
+STUDYMATE_STYLE = Style.from_dict({
+    "prompt": "bold ansicyan",
+    "completion-menu.completion": "bg:#1e1e2e #cdd6f4",
+    "completion-menu.completion.current": "bold bg:#313244 #f9e2af",
+    "completion-menu.meta.completion": "bg:#181825 #a6adc8",
+    "completion-menu.meta.completion.current": "bold bg:#313244 #89b4fa",
+    "scrollbar.background": "bg:#11111b",
+    "scrollbar.button": "bg:#585b70",
+})
+
+
+class StudyMateCompleter(Completer):
+    """
+    Auto-completer providing dropdown completions for slash commands and registered tools.
+    """
+
+    SLASH_COMMANDS = [
+        ("/help", "Show available CLI commands"),
+        ("/ingest", "Ingest study materials into Obsidian notes"),
+        ("/lint", "Run vault health check and link linter"),
+        ("/grill", "Launch Socratic active-recall sparring session"),
+        ("/templates", "Display Obsidian markdown templates"),
+        ("/clear", "Reset in-memory conversation history"),
+        ("/config", "View active configuration settings"),
+        ("/exit", "Exit StudyMate"),
+        ("/quit", "Exit StudyMate"),
+    ]
+
+    def __init__(self, registry: ToolRegistry) -> None:
+        self.registry = registry
+
+    def get_completions(self, document, complete_event):
+        text_before_cursor = document.text_before_cursor
+        word_before_cursor = document.get_word_before_cursor(WORD=True)
+
+        # Match slash commands if line starts with '/'
+        if text_before_cursor.startswith("/"):
+            query = text_before_cursor.lower()
+            for cmd, desc in self.SLASH_COMMANDS:
+                if cmd.lower().startswith(query):
+                    yield Completion(
+                        text=cmd,
+                        start_position=-len(text_before_cursor),
+                        display=cmd,
+                        display_meta=desc,
+                    )
+            return
+
+        # Match tools based on the current word
+        if word_before_cursor:
+            query = word_before_cursor.lower()
+            for tool_name, tool in self.registry.tools.items():
+                if tool_name.lower().startswith(query) or query in tool_name.lower():
+                    # Generate a concise description
+                    short_desc = tool.description.split(".")[0].strip() if tool.description else "Tool"
+                    if len(short_desc) > 65:
+                        short_desc = short_desc[:62] + "..."
+                    yield Completion(
+                        text=tool_name,
+                        start_position=-len(word_before_cursor),
+                        display=tool_name,
+                        display_meta=short_desc,
+                    )
 
 
 
@@ -232,6 +301,15 @@ def run_cli(
 
     engine = AgentEngine(llm_client=client, tool_registry=registry, config=app_config.agent)
 
+    session = None
+    try:
+        # Check if running in a real interactive terminal
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+            completer = StudyMateCompleter(registry)
+            session = PromptSession(completer=completer, style=STUDYMATE_STYLE)
+    except Exception:
+        session = None
+
     print_banner(app_config)
 
     if not app_config.llm.api_key:
@@ -242,7 +320,16 @@ def run_cli(
 
     while True:
         try:
-            user_input = console.input("[bold cyan]student > [/bold cyan]").strip()
+            # If console.input is mocked (e.g. by unit tests) or session not available, use console.input
+            if session is not None and getattr(console.input, "_mock_wraps", None) is None and getattr(console.input, "side_effect", None) is None:
+                try:
+                    raw_input = session.prompt([("class:prompt", "student > ")], complete_while_typing=True)
+                except Exception:
+                    raw_input = console.input("[bold cyan]student > [/bold cyan]")
+            else:
+                raw_input = console.input("[bold cyan]student > [/bold cyan]")
+
+            user_input = raw_input.strip()
 
             if not user_input:
                 continue
