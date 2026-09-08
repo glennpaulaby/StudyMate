@@ -274,3 +274,40 @@ def test_read_pdf_caps_requested_page_batch(sandbox_env):
 
     assert "Showing pages 1-10" in result
     assert "Continue with page_start=11" in result
+
+def test_write_file_no_partial_on_crash(sandbox_env, monkeypatch):
+    """Simulated crash at rename: target must not exist, no .tmp litter left."""
+    import os as _os
+
+    registry = sandbox_env["registry"]
+    artifacts = sandbox_env["artifacts_dir"]
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash at replace")
+
+    monkeypatch.setattr(_os, "replace", boom)
+    res = registry.execute("write_file", {"path": "artifacts/crash.md", "content": "hello"})
+    assert "Error" in res
+    assert not (artifacts / "crash.md").exists()
+    assert list(artifacts.glob("*.tmp")) == []
+
+
+def test_edit_file_no_partial_on_crash(sandbox_env, monkeypatch):
+    """Simulated crash at rename: original content intact, no .tmp litter left."""
+    import os as _os
+
+    registry = sandbox_env["registry"]
+    artifacts = sandbox_env["artifacts_dir"]
+    (artifacts / "doc.md").write_text("original content", encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash at replace")
+
+    monkeypatch.setattr(_os, "replace", boom)
+    res = registry.execute(
+        "edit_file",
+        {"path": "artifacts/doc.md", "target": "original", "replacement": "updated"},
+    )
+    assert "Error" in res
+    assert (artifacts / "doc.md").read_text(encoding="utf-8") == "original content"
+    assert list(artifacts.glob("*.tmp")) == []

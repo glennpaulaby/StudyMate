@@ -13,6 +13,11 @@ def test_default_config_loading():
     assert config.llm.temperature == 0.2
     assert config.agent.max_iterations == 50
     assert config.tools.filesystem.allow_delete is False
+    assert config.memory.enabled is True
+    assert config.memory.db_path == "./workspace/artifacts/memory/memory.db"
+    assert config.memory.max_inject == 5
+    assert config.llm.embedding_model == "octen-embedding-8b"
+    assert config.llm.reranker_model == "qwen3-reranker-4b"
 
 
 def test_yaml_config_loading(tmp_path: Path):
