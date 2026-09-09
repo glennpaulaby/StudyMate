@@ -32,6 +32,7 @@ from study_agent.memory.store import MemoryStore
 from study_agent.memory.threads import generate_thread_name, resolve_thread
 from study_agent.memory.tools import register_memory_tools
 from study_agent.study.griller import SocraticGriller
+from study_agent.study.procedures import DRAFT, format_procedures_block, match_procedures
 from study_agent.study.linter import VaultLinter
 from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
 from study_agent.tools.base import ToolRegistry
@@ -591,13 +592,16 @@ def run_cli(
             embedder = None
             reranker = None
     register_memory_tools(registry, memory_store, embedder, reranker)
+    facts_note_base = ""
     if memory_store is not None and app_config.memory.max_inject > 0:
         recent_facts = memory_store.recall_facts("", limit=app_config.memory.max_inject)
         if recent_facts:
             lines = ["Relevant long-term memory (persisted facts, most recent first):"]
             lines += [f"- [{f.topic}] {f.fact}" for f in recent_facts]
             lines.append("Use memory_recall to search all facts just-in-time when personalizing.")
-            context.inject_system_note("\n".join(lines))
+            facts_note_base = "\n".join(lines)
+            context.inject_system_note(facts_note_base)
+    procedures_dir = Path(app_config.agent.artifacts_dir) / "procedures"
     active_thread_id: Optional[str] = None
 
     def ensure_thread(first_text: str) -> Optional[str]:
@@ -831,6 +835,25 @@ def run_cli(
                 console.print(
                     f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{escape(tc.name)}[/yellow] "
                     f"[dim]{escape(str(tc.arguments))}[/dim]"
+                )
+
+            # Procedures: approved routines merge into the system note (template-safe,
+            # idempotent replace); drafts are surfaced, never silently followed.
+            approved = match_procedures(procedures_dir, user_input)
+            if approved:
+                note = facts_note_base
+                note += ("\n\n" if note else "") + format_procedures_block(approved)
+                context.inject_system_note(note)
+            elif facts_note_base:
+                context.inject_system_note(facts_note_base)
+            else:
+                context.reset_injected_note()
+            drafts = match_procedures(procedures_dir, user_input, statuses=(DRAFT,))
+            if drafts:
+                names = ", ".join(f"'{escape(d.name)}'" for d in drafts)
+                console.print(
+                    f"[dim]💡 Draft routine(s) match ({names}) — say the word and I'll follow "
+                    f"it, or approve it by flipping status to approved.[/dim]"
                 )
 
             ensure_thread(user_input)

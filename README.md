@@ -162,6 +162,14 @@ InnKube reranker (`memory_recall`). One API key covers chat, embeddings,
 and rerank (granted per model server-side). Top recent facts auto-inject
 at session start. All memory writes are append-only — nothing is ever deleted.
 
+#### Procedural Memory:
+Reusable routines live as markdown bundles in `workspace/artifacts/procedures/`
+(committed, reviewable). Each has triggers, scope, ordered steps, rationale,
+and a `draft/approved/archived` status. Matching approved routines inject
+automatically before the agent acts; drafts are surfaced for confirmation,
+never followed silently. Agent-distilled routines start as drafts for human
+approval; editing a file supersedes it (git is the version log).
+
 #### Context Compaction:
 Long sessions compact automatically at ~80% of the active model's window
 (resolved per model via `compaction.context_windows`, gateway discovery,
