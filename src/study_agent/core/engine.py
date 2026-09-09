@@ -1,6 +1,14 @@
 import logging
 from typing import Callable, Optional
-from study_agent.config.settings import AgentConfig
+from study_agent.config.settings import AgentConfig, CompactionConfig
+from study_agent.core.compaction import (
+    CompactionState,
+    compaction_threshold_tokens,
+    estimate_tokens,
+    is_context_overflow,
+    maybe_compact,
+    resolve_context_window,
+)
 from study_agent.core.context import ContextManager
 from study_agent.core.types import AgentRunResult, ToolCall
 from study_agent.llm.base import BaseLLMClient
@@ -20,11 +28,34 @@ class AgentEngine:
         self,
         llm_client: BaseLLMClient,
         tool_registry: ToolRegistry,
-        config: Optional[AgentConfig] = None
+        config: Optional[AgentConfig] = None,
+        compaction: Optional[CompactionConfig] = None,
+        llm_base_url: str = "",
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
         self.config = config or AgentConfig()
+        self.compaction = compaction or CompactionConfig()
+        self.compaction_state = CompactionState()
+        self.llm_base_url = llm_base_url
+        self._context_window: Optional[int] = None
+        self._window_source: str = "unresolved"
+
+    def _window(self) -> int:
+        """Resolves (and caches) the active model's context window."""
+        if self._context_window is None:
+            window, source = resolve_context_window(
+                self.llm_client_model_name(), self.compaction, self.llm_base_url
+            )
+            self._context_window = window
+            self._window_source = source
+            logger.info(f"Context window: {window} tokens (source: {source}).")
+        return self._context_window
+
+    def llm_client_model_name(self) -> str:
+        """Best-effort model name for window resolution (client-agnostic)."""
+        config = getattr(self.llm_client, "config", None)
+        return getattr(config, "model", "") or ""
 
     def run(
         self,
@@ -44,6 +75,8 @@ class AgentEngine:
         total_prompt_tokens = 0
         total_completion_tokens = 0
         total_tokens = 0
+        overflow_retried = False
+        self.compaction_state.compacted_this_run = False
 
         schemas = self.tool_registry.list_schemas() if self.tool_registry else None
 
@@ -51,11 +84,46 @@ class AgentEngine:
             iterations += 1
             logger.debug(f"Starting ReAct iteration {iterations}/{self.config.max_iterations}")
 
+            # 0. Context guard: auto-compact before the call, never after an overflow.
+            if self.compaction.enabled:
+                window = self._window()
+                fire_line = compaction_threshold_tokens(window, self.compaction)
+                if estimate_tokens(context.get_messages(), schemas) > fire_line:
+                    compacted, before, after = maybe_compact(
+                        context.get_messages(),
+                        self.llm_client,
+                        self.compaction,
+                        tool_schemas=schemas,
+                        state=self.compaction_state,
+                    )
+                    if compacted:
+                        logger.info(f"Auto-compacted context: {before} -> {after} tokens (est.).")
+
             # 1. Reason: Request completion from LLM with available tools
-            response = self.llm_client.chat(
-                messages=context.get_messages(),
-                tools=schemas if schemas else None
-            )
+            try:
+                response = self.llm_client.chat(
+                    messages=context.get_messages(),
+                    tools=schemas if schemas else None
+                )
+            except Exception as e:
+                if (
+                    self.compaction.enabled
+                    and not overflow_retried
+                    and is_context_overflow(e)
+                ):
+                    logger.warning(f"Context overflow detected ({e}); compacting and retrying once.")
+                    overflow_retried = True
+                    compacted, _, _ = maybe_compact(
+                        context.get_messages(),
+                        self.llm_client,
+                        self.compaction,
+                        tool_schemas=schemas,
+                        force=True,
+                        state=self.compaction_state,
+                    )
+                    if compacted:
+                        continue
+                raise
 
             total_prompt_tokens += response.prompt_tokens
             total_completion_tokens += response.completion_tokens

@@ -5,4 +5,5 @@ openai>=1.30.0
 rich>=13.7.0
 pypdf>=4.0.0
 questionary>=2.0.0
+prompt-toolkit>=3.0.0
 sqliteai-vector>=1.1.0
