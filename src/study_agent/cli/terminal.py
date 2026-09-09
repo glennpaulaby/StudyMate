@@ -858,9 +858,66 @@ def run_cli(
         memory_store.close()
 
 
+def launch_in_new_window() -> bool:
+    """Spawns StudyMate in a dedicated, clean terminal window on supported platforms."""
+    import os
+    import shutil
+    import subprocess
+
+    cwd = str(Path.cwd().resolve())
+    py_exe = sys.executable
+
+    # Check if Windows Terminal (wt.exe) is available for a modern UI window
+    wt_path = shutil.which("wt.exe") or shutil.which("wt")
+    if sys.platform == "win32":
+        env = dict(os.environ)
+        env["STUDYMATE_SPAWNED"] = "1"
+
+        if wt_path:
+            cmd = [
+                wt_path,
+                "-w", "new",
+                "--title", "StudyMate 🎓",
+                "-d", cwd,
+                py_exe, "-m", "study_agent.cli.terminal", "--inline"
+            ]
+            try:
+                subprocess.Popen(cmd, env=env)
+                return True
+            except Exception:
+                pass
+
+        # Fallback to standard Windows cmd.exe start
+        try:
+            cmd = f'start "StudyMate 🎓" /D "{cwd}" "{py_exe}" -m study_agent.cli.terminal --inline'
+            subprocess.Popen(cmd, shell=True, env=env)
+            return True
+        except Exception:
+            return False
+
+    return False
+
+
 def main() -> None:
     """CLI entrypoint invoked by `studymate` console script."""
-    run_cli()
+    import os
+
+    # If --inline or already spawned in a dedicated window or non-interactive/testing, run directly
+    if "--inline" in sys.argv:
+        sys.argv.remove("--inline")
+        run_cli()
+        return
+
+    if os.getenv("STUDYMATE_SPAWNED") == "1" or not (sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()):
+        run_cli()
+        return
+
+    # Attempt to pop up a dedicated window
+    if launch_in_new_window():
+        console.print("[bold green]🎓 Launched StudyMate in a new window![/bold green]")
+        console.print("[dim]You can close this terminal or keep working here.[/dim]")
+    else:
+        run_cli()
 
 
 if __name__ == "__main__":
