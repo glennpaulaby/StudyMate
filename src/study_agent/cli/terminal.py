@@ -18,6 +18,11 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.styles import Style
+
 from study_agent.config.loader import load_config
 from study_agent.config.settings import AppConfig
 from study_agent.core.context import ContextManager
@@ -25,13 +30,89 @@ from study_agent.core.engine import AgentEngine
 from study_agent.core.types import ToolCall
 from study_agent.llm.base import BaseLLMClient
 from study_agent.llm.client import OpenAICompatibleLLMClient
+from study_agent.memory.embeddings import Embedder, InnKubeEmbedder
+from study_agent.memory.rerank import InnKubeReranker, Reranker
+from study_agent.memory.store import MemoryStore
+from study_agent.memory.threads import generate_thread_name, resolve_thread
+from study_agent.memory.tools import register_memory_tools
 from study_agent.study.griller import SocraticGriller
-from study_agent.study.linter import VaultLinter
+from study_agent.study.linter import VaultLintReport, VaultLinter
 from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
 from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
+from study_agent.tools.mcp import register_mcp_tools
+from study_agent.tools.mcp.services import WebResearchService
 
 console = Console()
+
+STUDYMATE_STYLE = Style.from_dict({
+    "prompt": "bold ansicyan",
+    "completion-menu.completion": "bg:#1e1e2e #cdd6f4",
+    "completion-menu.completion.current": "bold bg:#313244 #f9e2af",
+    "completion-menu.meta.completion": "bg:#181825 #a6adc8",
+    "completion-menu.meta.completion.current": "bold bg:#313244 #89b4fa",
+    "scrollbar.background": "bg:#11111b",
+    "scrollbar.button": "bg:#585b70",
+})
+
+
+class StudyMateCompleter(Completer):
+    """
+    Auto-completer providing dropdown completions for slash commands and registered tools.
+    """
+
+    SLASH_COMMANDS = [
+        ("/help", "Show available CLI commands"),
+        ("/ingest", "Ingest study materials into Obsidian notes"),
+        ("/lint", "Run vault health check and link linter"),
+        ("/grill", "Launch Socratic active-recall sparring session"),
+        ("/templates", "Display Obsidian markdown templates"),
+        ("/threads", "Browse and pick previous chat threads"),
+        ("/thread", "Enter or continue a specific chat thread"),
+        ("/new", "Start a new conversation thread"),
+        ("/archive-this", "Archive the current active chat thread"),
+        ("/archive-all", "Archive all chat threads"),
+        ("/clear", "Reset in-memory conversation history"),
+        ("/config", "View active configuration settings"),
+        ("/exit", "Exit StudyMate"),
+        ("/quit", "Exit StudyMate"),
+    ]
+
+    def __init__(self, registry: ToolRegistry) -> None:
+        self.registry = registry
+
+    def get_completions(self, document, complete_event):
+        text_before_cursor = document.text_before_cursor
+        word_before_cursor = document.get_word_before_cursor(WORD=True)
+
+        # Match slash commands if line starts with '/'
+        if text_before_cursor.startswith("/"):
+            query = text_before_cursor.lower()
+            for cmd, desc in self.SLASH_COMMANDS:
+                if cmd.lower().startswith(query):
+                    yield Completion(
+                        text=cmd,
+                        start_position=-len(text_before_cursor),
+                        display=cmd,
+                        display_meta=desc,
+                    )
+            return
+
+        # Match tools based on the current word
+        if word_before_cursor:
+            query = word_before_cursor.lower()
+            for tool_name, tool in self.registry.tools.items():
+                if tool_name.lower().startswith(query) or query in tool_name.lower():
+                    # Generate a concise description
+                    short_desc = tool.description.split(".")[0].strip() if tool.description else "Tool"
+                    if len(short_desc) > 65:
+                        short_desc = short_desc[:62] + "..."
+                    yield Completion(
+                        text=tool_name,
+                        start_position=-len(word_before_cursor),
+                        display=tool_name,
+                        display_meta=short_desc,
+                    )
 
 
 
@@ -53,19 +134,299 @@ def print_help() -> None:
     table.add_column("Description", style="white")
     table.add_row("/help", "Show this help table")
     table.add_row(escape("/ingest [path]"), "Ingest source files and generate Obsidian concept notes + lecture summary")
-    table.add_row(escape("/lint [path]"), "Run vault health check (broken links, orphans, open questions)")
+    table.add_row(escape("/lint [path]"), "Lint the vault and automatically repair broken links and formatting issues")
     table.add_row("/grill <topic>", "Launch an interactive Socratic grilling sparring session")
     table.add_row("/templates", "Display standard Obsidian markdown templates")
-    table.add_row("/clear", "Reset conversation history and reload system prompt")
+    table.add_row("/threads", "List previous chat threads")
+    table.add_row(escape("/thread <id|name>"), "Enter/continue a previous thread")
+    table.add_row(escape("/new [name]"), "Start a new thread (default on first message)")
+    table.add_row(escape("/archive-this"), "Archive the current thread (tombstone, no delete)")
+    table.add_row(escape("/archive-all"), "Archive ALL threads (asks for confirmation)")
+    table.add_row("/clear", "Reset in-memory history (thread history stays saved)")
     table.add_row("/config", "Display current configuration parameters")
     table.add_row("/exit, /quit", "Exit StudyMate")
     console.print(table)
 
 
-def run_vault_lint(target_dir: str) -> None:
-    """Executes vault health check and prints a structured Rich summary."""
+def format_local_time(iso_ts: str) -> str:
+    """Formats a UTC ISO timestamp in the user's local timezone."""
+    from datetime import datetime as _dt
+
+    try:
+        return _dt.fromisoformat(iso_ts).astimezone().strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso_ts[:16].replace("T", " ")
+
+
+def render_message(role: str, content: Optional[str]) -> None:
+    """Renders one chat message with a speaker prefix (student > / studymate >)."""
+    if role == "user":
+        console.print("[bold cyan]student > [/bold cyan]" + escape(content or ""))
+    elif role == "assistant":
+        if (content or "").strip():
+            console.print("[bold magenta]studymate > [/bold magenta]", end="")
+            console.print(Markdown(content or ""))
+        else:
+            console.print("[bold magenta]studymate > [/bold magenta][dim](tool action, no text)[/dim]")
+    elif role == "tool":
+        console.print(f"  [dim]↳ tool observation: {escape((content or '')[:200])}[/dim]")
+    else:
+        console.print(escape(content or ""))
+
+
+def _visible_history(messages) -> list:
+    """Filters out system prompts and empty tool-only assistant turns."""
+    visible = []
+    for msg in messages or []:
+        role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        if role == "system":
+            continue
+        if role == "assistant" and not (msg.content or "").strip() and not msg.tool_calls:
+            continue
+        visible.append(msg)
+    return visible
+
+
+def _ask_show_older(count: int, remaining: int) -> bool:
+    """Asks whether to reveal an older page (TTY only; defaults False)."""
+    import sys as _sys
+
+    try:
+        import questionary as _q
+
+        if bool(getattr(_sys.stdin, "isatty", lambda: False)()):
+            try:
+                answer = _q.confirm(
+                    f"Show {count} older message(s)? ({remaining} remaining)"
+                ).ask()
+            except KeyboardInterrupt:
+                console.print()
+                return False
+            return bool(answer)
+    except (ImportError, Exception):
+        pass
+    try:
+        from rich.prompt import Confirm as _Confirm
+
+        return bool(_Confirm.ask(f"Show {count} older message(s)? ({remaining} remaining)", default=False))
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+        return False
+
+
+def render_history(messages, page_size: int = 10) -> None:
+    """Prints a restored transcript, most recent page first with show-older paging."""
+    import sys as _sys
+
+    visible = _visible_history(messages)
+    if not visible:
+        console.print("[dim](empty thread — no messages yet)[/dim]")
+        return
+    total = len(visible)
+    is_tty = bool(getattr(_sys.stdin, "isatty", lambda: False)())
+    if not is_tty:
+        for msg in visible:
+            role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+            render_message(role, msg.content)
+        console.print()
+        return
+    start = max(0, total - page_size)
+    for msg in visible[start:]:
+        role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        render_message(role, msg.content)
+    remaining = start
+    while remaining > 0:
+        chunk = min(page_size, remaining)
+        if not _ask_show_older(chunk, remaining):
+            break
+        start = remaining - chunk
+        console.print(f"[dim]--- {chunk} older message(s) ---[/dim]")
+        for msg in visible[start:start + chunk]:
+            role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+            render_message(role, msg.content)
+        remaining = start
+    console.print(f"[dim](showing {total - remaining} of {total} messages)[/dim]\n")
+
+
+THREADS_PAGE_SIZE = 10
+
+_SEE_MORE = "__see_more__"
+_CANCEL = "__cancel__"  # explicit sentinel: Choice(value=None) defaults to title, so None is unusable
+
+
+def _thread_choice_title(store: MemoryStore, t, active_id: Optional[str]) -> str:
+    """One-line label for a thread choice; active thread is prefixed and tagged."""
+    if t.id == active_id:
+        return f"● {t.name}  ({store.count_messages(t.id)} msgs, {format_local_time(t.updated_at)}) — current"
+    return f"  {t.name}  ({store.count_messages(t.id)} msgs, {format_local_time(t.updated_at)})"
+
+
+def _picker_style():
+    """StudyMate picker theme: exactly one highlight = the cursor row (whole row, reverse video).
+
+    Deliberately no `selected` styling: questionary pins `class:selected` onto
+    the `default=` row persistently, which reads as a second stuck highlight.
+    The active thread is marked by text (● + "— current") instead.
+    """
+    try:
+        from questionary import Style as _Style
+
+        return _Style(
+            [
+                ("pointer", "bold cyan"),
+                ("highlighted", "reverse bold"),
+                ("answer", "bold green"),
+                ("selected", ""),
+            ]
+        )
+    except (ImportError, Exception):
+        return None
+
+
+def pick_thread_interactive(store: MemoryStore, active_id: Optional[str] = None, page_size: int = 10):
+    """Arrow-key thread picker (↑/↓ + Enter) with See-more pagination.
+
+    Each request fetches one page (`limit=page_size`); choosing
+    "See more" issues the next paged request. Numbered fallback
+    when not a TTY. Returns the chosen ThreadRecord or None on cancel.
+    """
+    import sys as _sys
+
+    total = store.count_threads()
+    if total == 0:
+        console.print("[yellow]No previous threads yet. Just ask something to start one.[/yellow]")
+        return None
+
+    shown: list = []
+    offset = 0
+    while True:
+        page = store.list_threads(limit=page_size, offset=offset)
+        if not page:
+            return None
+        shown.extend(page)
+        has_more = len(shown) < total
+
+        try:
+            import questionary as _q
+
+            if bool(getattr(_sys.stdin, "isatty", lambda: False)()):
+                # Note: lone Esc is swallowed by prompt_toolkit (Meta-key prefix),
+                # so an explicit Cancel choice + Ctrl-C are the reliable exits.
+                choices = [
+                    _q.Choice(title=_thread_choice_title(store, t, active_id), value=t)
+                    for t in shown
+                ]
+                if has_more:
+                    choices.append(
+                        _q.Choice(title=f"› See more ({len(shown)} of {total})…", value=_SEE_MORE)
+                    )
+                choices.append(_q.Choice(title="✕ Cancel", value=_CANCEL))
+                # No `default=`: it pins a persistent `selected` highlight on that
+                # row, independent of the cursor. Single highlight = cursor row.
+                try:
+                    chosen = _q.select(
+                        f"Select a thread — showing {len(shown)} of {total} (↑/↓ + Enter):",
+                        choices=choices,
+                        style=_picker_style(),
+                    ).ask()
+                except KeyboardInterrupt:
+                    console.print()
+                    return None
+                if chosen is None or chosen == _CANCEL:
+                    return None
+                if chosen == _SEE_MORE:
+                    offset += page_size
+                    continue
+                if not hasattr(chosen, "id"):
+                    return None  # defensive: never let a raw string reach the caller
+                return chosen
+        except (ImportError, Exception):
+            pass
+
+        # Fallback: numbered prompt (tests, non-TTY, questionary missing)
+        from rich.prompt import Prompt
+
+        table = Table(title=f"Chat Threads ({len(shown)} of {total})", show_header=True, header_style="bold magenta")
+        table.add_column("#", style="cyan", width=4)
+        table.add_column("Name", style="white")
+        table.add_column("Messages", style="green")
+        table.add_column("Updated (local)", style="dim")
+        for i, t in enumerate(shown, start=1):
+            marker = " [bold cyan]● current[/bold cyan]" if t.id == active_id else ""
+            table.add_row(
+                str(i),
+                escape(t.name) + marker,
+                str(store.count_messages(t.id)),
+                escape(format_local_time(t.updated_at)),
+            )
+        if has_more:
+            table.add_row("m", "[dim]See more…[/dim]", "", "")
+        console.print(table)
+        try:
+            hint = "[cyan]Enter # / 'm' for more (Enter to cancel)[/cyan]" if has_more else "[cyan]Enter # (Enter to cancel)[/cyan]"
+            choice = Prompt.ask(hint, default="", show_default=False).strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            return None
+        if not choice:
+            return None
+        if has_more and choice.lower() == "m":
+            offset += page_size
+            continue
+        if not choice.isdigit() or not (1 <= int(choice) <= len(shown)):
+            console.print(f"[red]Invalid choice: {escape(choice)}[/red]")
+            return None
+        return shown[int(choice) - 1]
+
+
+def print_threads(store: MemoryStore, active_id: Optional[str] = None, page_size: int = 10) -> None:
+    """Displays the first page of threads (non-interactive list)."""
+    total = store.count_threads()
+    if total == 0:
+        console.print("[yellow]No previous threads yet. Just ask something to start one.[/yellow]")
+        return
+    threads = store.list_threads(limit=page_size, offset=0)
+    table = Table(title=f"Chat Threads ({len(threads)} of {total})", show_header=True, header_style="bold magenta")
+    table.add_column("#", style="cyan", width=4)
+    table.add_column("Name", style="white")
+    table.add_column("Messages", style="green")
+    table.add_column("Updated (local)", style="dim")
+    for i, t in enumerate(threads, start=1):
+        marker = " ●" if t.id == active_id else ""
+        table.add_row(
+            str(i),
+            escape(t.name) + marker,
+            str(store.count_messages(t.id)),
+            escape(format_local_time(t.updated_at)),
+        )
+    console.print(table)
+    console.print("[dim]Use /threads to browse all pages, /thread <id|name> to jump directly.[/dim]")
+
+
+def run_vault_lint(
+    target_dir: str,
+    engine: Optional[AgentEngine] = None,
+    context: Optional[ContextManager] = None,
+) -> None:
+    """Lint a vault and ask the agent to repair detected integrity errors."""
     linter = VaultLinter(target_dir)
     with console.status("[bold green]Linting vault knowledge graph...[/bold green]"):
+        report = linter.lint()
+
+    if (report.broken_links or report.metadata_issues) and engine and context:
+        repair_prompt = _build_lint_repair_prompt(target_dir, report)
+        console.print(
+            "[bold yellow]⚙ Lint errors found. StudyMate is attempting automatic repairs...[/bold yellow]"
+        )
+        with console.status("[bold green]Repairing vault issues...[/bold green]"):
+            repair_result = engine.run(repair_prompt, context)
+        if repair_result.is_success:
+            console.print("[green]✓ Automatic repair pass completed.[/green]")
+        else:
+            console.print(
+                f"[bold red]Automatic repair stopped:[/bold red] "
+                f"{repair_result.error_message or 'No repair summary was produced.'}"
+            )
         report = linter.lint()
 
     console.print()
@@ -85,6 +446,9 @@ def run_vault_lint(target_dir: str) -> None:
     broken_style = "[green]0 (Clean)[/green]" if len(report.broken_links) == 0 else f"[red]{len(report.broken_links)} Broken[/red]"
     summary.add_row("Broken Wikilinks", str(len(report.broken_links)), broken_style)
 
+    metadata_style = "[green]0 (Clean)[/green]" if len(report.metadata_issues) == 0 else f"[red]{len(report.metadata_issues)} Issues[/red]"
+    summary.add_row("Formatting / Metadata Issues", str(len(report.metadata_issues)), metadata_style)
+
     orphan_style = "[green]0[/green]" if len(report.orphan_pages) == 0 else f"[yellow]{len(report.orphan_pages)} Orphans[/yellow]"
     summary.add_row("Orphan Pages", str(len(report.orphan_pages)), orphan_style)
 
@@ -100,6 +464,14 @@ def run_vault_lint(target_dir: str) -> None:
             broken_table.add_row(escape(src), escape(f"[[{tgt}]]"))
         console.print(broken_table)
 
+    if report.metadata_issues:
+        metadata_table = Table(title="⚠️ Formatting / Metadata Issues", show_header=True, header_style="bold red")
+        metadata_table.add_column("Note", style="yellow")
+        metadata_table.add_column("Issue", style="red")
+        for source, issue in report.metadata_issues[:10]:
+            metadata_table.add_row(escape(source), escape(issue))
+        console.print(metadata_table)
+
     # Orphan pages details
     if report.orphan_pages:
         console.print("\n[bold yellow]📌 Orphan Pages (no incoming links):[/bold yellow]")
@@ -112,6 +484,29 @@ def run_vault_lint(target_dir: str) -> None:
         for src, q in report.open_questions[:10]:
             console.print(f"  - [dim]{escape(src)}:[/dim] {escape(q)}")
     console.print()
+
+
+def _build_lint_repair_prompt(target_dir: str, report: VaultLintReport) -> str:
+    """Build a constrained repair request from a lint report."""
+    issues = []
+    for source, target in report.broken_links:
+        issues.append(f"- Broken wikilink in '{source}': [[{target}]]")
+    for source, description in report.metadata_issues:
+        issues.append(f"- Formatting/frontmatter issue in '{source}': {description}")
+
+    return (
+        f"Repair the detected integrity errors in the Markdown vault at '{target_dir}'. "
+        "Read each affected note before editing. Fix only the listed broken wikilinks "
+        "and formatting/frontmatter issues. For broken wikilinks, link to an existing "
+        "note when the intended target is unambiguous; otherwise remove only the broken "
+        "link syntax and preserve the surrounding meaning. For frontmatter issues, "
+        "preserve existing metadata and add only the required missing fields using the "
+        "vault's established note format. Use edit_file for precise changes and write_file "
+        "only when necessary. Do not delete files, invent notes, rewrite unrelated content, "
+        "or modify orphan status. After editing, report the files changed.\n\n"
+        "Detected issues:\n"
+        + "\n".join(issues)
+    )
 
 
 def print_templates() -> None:
@@ -134,8 +529,10 @@ def print_config(config: AppConfig) -> None:
     table.add_row("Max Iterations", str(config.agent.max_iterations))
     table.add_row("Data Dir (Read-Only)", config.agent.data_dir)
     table.add_row("Artifacts Dir (Write)", config.agent.artifacts_dir)
+    table.add_row("Memory Enabled", str(config.memory.enabled))
+    table.add_row("Memory DB", config.memory.db_path)
     table.add_row("API Key Set?", "Yes" if config.llm.api_key else "No (Set INNKUBE_API_KEY)")
-    
+
     console.print(table)
 
 
@@ -152,8 +549,8 @@ def run_cli(
     context = ContextManager(system_prompt_path=app_config.agent.system_prompt_path)
 
     registry = tool_registry or ToolRegistry()
+    project_root = Path.cwd().resolve()
     if tool_registry is None and app_config.tools.filesystem.enabled:
-        project_root = Path.cwd().resolve()
         workspace_root = (project_root / app_config.agent.workspace_dir).resolve()
         register_filesystem_tools(
             registry,
@@ -161,8 +558,77 @@ def run_cli(
             config=app_config.tools.filesystem,
             workspace_root=workspace_root,
         )
+    if tool_registry is None and app_config.tools.mcp.enabled:
+        configured_vault = app_config.tools.mcp.vault_path
+        vault_path = Path(configured_vault)
+        if not vault_path.is_absolute():
+            vault_path = (project_root / vault_path).resolve()
+        if vault_path.is_dir():
+            register_mcp_tools(
+                registry,
+                vault_path=vault_path,
+                search_service=WebResearchService(app_config.tools.mcp.search_endpoint),
+                max_results=app_config.tools.mcp.max_results,
+            )
 
     engine = AgentEngine(llm_client=client, tool_registry=registry, config=app_config.agent)
+
+    memory_store: Optional[MemoryStore] = None
+    if app_config.memory.enabled:
+        try:
+            memory_store = MemoryStore(app_config.memory.db_path)
+        except Exception as e:
+            console.print(f"[yellow]Memory disabled (DB init failed): {e}[/yellow]")
+            memory_store = None
+    embedder: Optional[Embedder] = None
+    reranker: Optional[Reranker] = None
+    if memory_store is not None and app_config.llm.api_key:
+        try:
+            embedder = InnKubeEmbedder(
+                api_key=app_config.llm.api_key,
+                base_url=app_config.llm.base_url,
+                model=app_config.llm.embedding_model,
+                timeout=app_config.llm.timeout,
+            )
+            reranker = InnKubeReranker(
+                api_key=app_config.llm.api_key,
+                base_url=app_config.llm.base_url,
+                model=app_config.llm.reranker_model,
+                timeout=app_config.llm.timeout,
+            )
+        except Exception as e:
+            console.print(f"[yellow]Semantic recall disabled (embedder init failed): {e}[/yellow]")
+            embedder = None
+            reranker = None
+    register_memory_tools(registry, memory_store, embedder, reranker)
+    if memory_store is not None and app_config.memory.max_inject > 0:
+        recent_facts = memory_store.recall_facts("", limit=app_config.memory.max_inject)
+        if recent_facts:
+            lines = ["Relevant long-term memory (persisted facts, most recent first):"]
+            lines += [f"- [{f.topic}] {f.fact}" for f in recent_facts]
+            lines.append("Use memory_recall to search all facts just-in-time when personalizing.")
+            context.inject_system_note("\n".join(lines))
+    active_thread_id: Optional[str] = None
+
+    def ensure_thread(first_text: str) -> Optional[str]:
+        """Lazily creates the default new thread on first task message."""
+        nonlocal active_thread_id
+        if memory_store is None or active_thread_id is not None:
+            return active_thread_id
+        name = generate_thread_name(first_text)
+        thread = memory_store.create_thread(name)
+        active_thread_id = thread.id
+        console.print(f"[dim]New thread: {escape(name)} ({escape(thread.id[:8])})[/dim]")
+        return active_thread_id
+
+    session = None
+    try:
+        # Check if running in a real interactive terminal
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+            completer = StudyMateCompleter(registry)
+            session = PromptSession(completer=completer, style=STUDYMATE_STYLE)
+    except Exception:
+        session = None
 
     print_banner(app_config)
 
@@ -174,7 +640,16 @@ def run_cli(
 
     while True:
         try:
-            user_input = console.input("[bold cyan]student > [/bold cyan]").strip()
+            # If console.input is mocked (e.g. by unit tests) or session not available, use console.input
+            if session is not None and getattr(console.input, "_mock_wraps", None) is None and getattr(console.input, "side_effect", None) is None:
+                try:
+                    raw_input = session.prompt([("class:prompt", "student > ")], complete_while_typing=True)
+                except Exception:
+                    raw_input = console.input("[bold cyan]student > [/bold cyan]")
+            else:
+                raw_input = console.input("[bold cyan]student > [/bold cyan]")
+
+            user_input = raw_input.strip()
 
             if not user_input:
                 continue
@@ -182,6 +657,8 @@ def run_cli(
             # Handle slash commands
             if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
                 console.print("[dim]Goodbye and happy studying! 🎓[/dim]")
+                if memory_store is not None:
+                    memory_store.close()
                 break
             elif user_input.lower() == "/help":
                 print_help()
@@ -189,10 +666,117 @@ def run_cli(
             elif user_input.lower() == "/templates":
                 print_templates()
                 continue
+            elif user_input.lower() == "/threads":
+                if memory_store is None:
+                    console.print("[yellow]Memory is disabled.[/yellow]")
+                else:
+                    chosen = pick_thread_interactive(memory_store, active_thread_id)
+                    if chosen is not None:
+                        active_thread_id = chosen.id
+                        history = memory_store.get_messages(
+                            chosen.id, limit=app_config.memory.max_load
+                        )
+                        context.load_history(history)
+                        console.print(
+                            f"[green]✓ Entered thread '{escape(chosen.name)}' "
+                            f"({len(history)} messages restored).[/green]\n"
+                        )
+                        render_history(history)
+                continue
+            elif user_input.lower().startswith("/thread"):
+                if memory_store is None:
+                    console.print("[yellow]Memory is disabled.[/yellow]")
+                    continue
+                parts = user_input.split(maxsplit=1)
+                if len(parts) < 2 or not parts[1].strip():
+                    console.print("[yellow]Usage: /thread <#|id|name>[/yellow]")
+                    continue
+                query = parts[1].strip()
+                found = None
+                if query.isdigit() and int(query) >= 1:
+                    # Positional pick = single paged row, no full-table scan.
+                    page = memory_store.list_threads(limit=1, offset=int(query) - 1)
+                    found = page[0] if page else None
+                else:
+                    found = memory_store.get_thread(query)
+                    if found is None:
+                        matches = memory_store.find_threads(query, limit=5)
+                        if len(matches) == 1:
+                            found = matches[0]
+                        elif len(matches) > 1:
+                            console.print("[yellow]Multiple matches:[/yellow]")
+                            for i, m in enumerate(matches, start=1):
+                                console.print(f"  {i}. {escape(m.name)} ({escape(m.id[:8])})")
+                            console.print("[dim]Refine your query or pick from /threads.[/dim]")
+                            continue
+                if found is None:
+                    console.print(f"[red]Thread not found: {escape(query)}[/red]")
+                    continue
+                active_thread_id = found.id
+                history = memory_store.get_messages(found.id, limit=app_config.memory.max_load)
+                context.load_history(history)
+                console.print(
+                    f"[green]✓ Entered thread '{escape(found.name)}' "
+                    f"({len(history)} messages restored).[/green]\n"
+                )
+                render_history(history)
+                continue
+            elif user_input.lower().startswith("/new"):
+                parts = user_input.split(maxsplit=1)
+                context.clear()
+                if memory_store is None:
+                    console.print("[green]✓ Started fresh (memory disabled).[/green]")
+                    continue
+                if len(parts) > 1 and parts[1].strip():
+                    thread = memory_store.create_thread(parts[1].strip())
+                    active_thread_id = thread.id
+                    console.print(f"[green]✓ New thread: {escape(thread.name)}[/green]")
+                else:
+                    active_thread_id = None
+                    console.print("[green]✓ Started fresh (next message creates a thread).[/green]")
+                continue
+            elif user_input.lower() == "/archive-this":
+                if memory_store is None:
+                    console.print("[yellow]Memory is disabled.[/yellow]")
+                    continue
+                if active_thread_id is None:
+                    console.print("[yellow]No active thread to archive.[/yellow]")
+                    continue
+                thread = memory_store.get_thread(active_thread_id, include_archived=True)
+                name = thread.name if thread else active_thread_id[:8]
+                if memory_store.archive_thread(active_thread_id):
+                    console.print(f"[green]✓ Archived thread '{escape(name)}' (history kept, hidden).[/green]")
+                else:
+                    console.print("[yellow]Thread was already archived.[/yellow]")
+                active_thread_id = None
+                context.clear()
+                continue
+            elif user_input.lower() == "/archive-all":
+                if memory_store is None:
+                    console.print("[yellow]Memory is disabled.[/yellow]")
+                    continue
+                from rich.prompt import Confirm
+
+                try:
+                    confirmed = Confirm.ask(
+                        "[red]Archive ALL threads? (history kept, hidden)[/red]",
+                        default=False,
+                    )
+                except (KeyboardInterrupt, EOFError):
+                    console.print()
+                    continue
+                if not confirmed:
+                    console.print("[dim]Cancelled.[/dim]")
+                    continue
+                n = memory_store.archive_all()
+                active_thread_id = None
+                context.clear()
+                console.print(f"[green]✓ Archived {n} thread(s) (history kept, hidden).[/green]")
+                continue
             elif user_input.lower().startswith("/lint"):
                 parts = user_input.split(maxsplit=1)
                 target_path = parts[1] if len(parts) > 1 else app_config.agent.artifacts_dir
-                run_vault_lint(target_path)
+                run_vault_lint(target_path, engine=engine, context=context)
                 continue
             elif user_input.lower().startswith("/grill"):
                 parts = user_input.split(maxsplit=1)
@@ -233,6 +817,9 @@ def run_cli(
                     f"[dim]{escape(str(tc.arguments))}[/dim]"
                 )
 
+            ensure_thread(user_input)
+            pre_len = len(context.get_messages())
+
             # Run ReAct Loop with animated status
             with console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots"):
                 try:
@@ -245,9 +832,17 @@ def run_cli(
                     console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
                     continue
 
+            if memory_store is not None and active_thread_id is not None:
+                try:
+                    for msg in context.get_messages()[pre_len:]:
+                        memory_store.add_message(active_thread_id, msg)
+                except Exception as e:
+                    console.print(f"[yellow]Warning: failed to persist thread: {e}[/yellow]")
+
             # Render response
             console.print()
             if result.final_response:
+                console.print("[bold magenta]studymate > [/bold magenta]", end="")
                 console.print(Markdown(result.final_response))
             elif not result.is_success:
                 console.print(f"[bold red]Agent stopped:[/bold red] {result.error_message or 'The agent did not return a response.'}")
@@ -259,10 +854,70 @@ def run_cli(
             console.print("\n[dim]Session ended. Goodbye! 🎓[/dim]")
             break
 
+    if memory_store is not None:
+        memory_store.close()
+
+
+def launch_in_new_window() -> bool:
+    """Spawns StudyMate in a dedicated, clean terminal window on supported platforms."""
+    import os
+    import shutil
+    import subprocess
+
+    cwd = str(Path.cwd().resolve())
+    py_exe = sys.executable
+
+    # Check if Windows Terminal (wt.exe) is available for a modern UI window
+    wt_path = shutil.which("wt.exe") or shutil.which("wt")
+    if sys.platform == "win32":
+        env = dict(os.environ)
+        env["STUDYMATE_SPAWNED"] = "1"
+
+        if wt_path:
+            cmd = [
+                wt_path,
+                "-w", "new",
+                "--title", "StudyMate 🎓",
+                "-d", cwd,
+                py_exe, "-m", "study_agent.cli.terminal", "--inline"
+            ]
+            try:
+                subprocess.Popen(cmd, env=env)
+                return True
+            except Exception:
+                pass
+
+        # Fallback to standard Windows cmd.exe start
+        try:
+            cmd = f'start "StudyMate 🎓" /D "{cwd}" "{py_exe}" -m study_agent.cli.terminal --inline'
+            subprocess.Popen(cmd, shell=True, env=env)
+            return True
+        except Exception:
+            return False
+
+    return False
+
 
 def main() -> None:
     """CLI entrypoint invoked by `studymate` console script."""
-    run_cli()
+    import os
+
+    # If --inline or already spawned in a dedicated window or non-interactive/testing, run directly
+    if "--inline" in sys.argv:
+        sys.argv.remove("--inline")
+        run_cli()
+        return
+
+    if os.getenv("STUDYMATE_SPAWNED") == "1" or not (sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()):
+        run_cli()
+        return
+
+    # Attempt to pop up a dedicated window
+    if launch_in_new_window():
+        console.print("[bold green]🎓 Launched StudyMate in a new window![/bold green]")
+        console.print("[dim]You can close this terminal or keep working here.[/dim]")
+    else:
+        run_cli()
 
 
 if __name__ == "__main__":

@@ -61,3 +61,7 @@ logs/
 *.log
 uv.lock
 
+# Workspace runtime data (local dev database + study materials — never commit)
+workspace/artifacts/memory/
+workspace/data/
+

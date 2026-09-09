@@ -1,9 +1,32 @@
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from study_agent.config.settings import FilesystemToolConfig
 from study_agent.tools.base import BaseTool, ToolRegistry
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Writes crash-atomically: temp file in the same dir + os.replace.
+
+    A crash mid-write can never leave a truncated target: the target path
+    only ever flips from old content to new content in one atomic rename.
+    Temp file stays inside the already-validated parent dir (jail-safe).
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class PathSecurityManager:
@@ -147,7 +170,7 @@ class WriteFileTool(BaseTool):
     def execute(self, path: str, content: str, **kwargs: Any) -> str:
         target = self.security.validate_write_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        _atomic_write_text(target, content)
         line_count = len(content.splitlines())
         byte_count = len(content.encode("utf-8"))
         return f"Successfully wrote {byte_count} bytes ({line_count} lines) to {path}"
@@ -382,7 +405,7 @@ class EditFileTool(BaseTool):
             return f"Error: Target text appears {count} times in {path}. Provide a more specific target snippet."
 
         new_content = content.replace(target, replacement, 1)
-        target_path.write_text(new_content, encoding="utf-8")
+        _atomic_write_text(target_path, new_content)
         return f"Successfully edited {path} (replaced 1 occurrence)."
 
 

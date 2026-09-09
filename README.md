@@ -23,6 +23,14 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
   - `workspace/artifacts/`: **Read, Write, and Edit** (where generated study artifacts reside).
   - **No Deletion Guarantee**: The agent is strictly prohibited from deleting any files or directories across all paths.
   - **Jail Containment**: All file operations are sandboxed strictly within `./workspace/`; directory traversal outside this boundary is rejected.
+- **MCP Research and Obsidian Tools**:
+  - `research_topic` performs Perplexity-style multi-source research: it aggregates
+    deduplicated sources, fetches relevant same-site pages, and returns cited page
+    evidence. Set `depth=0` for search-only results or provide `domains` to search
+    selected websites independently.
+  - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`,
+    `obsidian_edit_note`, and `obsidian_append_note` support filesystem-first note-taking,
+    including anchored edits and `[[wikilinks]]`, without deletion.
 
 ---
 
@@ -64,7 +72,8 @@ project/group-11/
 │       ├── config/             # Configuration schemas and YAML/env loader
 │       ├── core/               # ReAct loop, context manager, and state machine
 │       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
-│       ├── tools/              # Tool registry and sandboxed filesystem & PDF tools
+│       ├── tools/              # Tool registry, filesystem/PDF tools, and MCP capabilities
+│       │   └── mcp/            # Internet research + Obsidian MCP server and adapters
 │       ├── study/              # Obsidian templates, VaultLinter, and SocraticGriller
 │       ├── memory/             # Persistent long-term memory (Week 2)
 │       ├── observability/      # Prometheus telemetry & lifecycle hooks (Week 3)
@@ -137,15 +146,37 @@ Once installed, launch the interactive agent terminal using:
 studymate
 ```
 
+The MCP server can be launched over stdio for an MCP host. Set `OBSIDIAN_VAULT_PATH`
+to override the vault directory; it defaults to the project `workspace/` directory:
+
+```powershell
+$env:OBSIDIAN_VAULT_PATH = "C:\path\to\your\vault"
+python -m study_agent.tools.mcp.server
+```
+
 #### Interactive Commands in REPL:
 - `/help` — Display command guide
 - `/ingest [path]` — Ingest source files (defaults to `workspace/data/`) into Obsidian concept notes + lecture summary
 - `/lint [path]` — Run knowledge graph health check on study artifacts
 - `/grill <topic>` — Launch an interactive Socratic sparring session on a topic
 - `/templates` — Display standard Obsidian markdown templates
-- `/clear` — Reset conversation history
+- `/threads` — Browse previous chat threads (↑/↓ + Enter, paged)
+- `/thread <#|id|name>` — Enter/continue a previous thread (transcript restored)
+- `/new [name]` — Start a new thread (default on first message)
+- `/archive-this` — Archive the current thread (tombstone, no delete)
+- `/archive-all` — Archive ALL threads (asks for confirmation)
+- `/clear` — Reset in-memory history (thread history stays saved)
 - `/config` — View active runtime settings
 - `/exit, /quit` — Quit StudyMate
+
+#### Long-Term Memory:
+Chat threads persist across restarts in `workspace/artifacts/memory/memory.db`
+(SQLite). Durable facts (preferences, struggles) are stored via the agent's
+`memory_store` tool and retrieved hybrid: exact keyword matches first, then
+meaning-similar hits via `sqlite-vector` cosine search, reordered by the
+InnKube reranker (`memory_recall`). One API key covers chat, embeddings,
+and rerank (granted per model server-side). Top recent facts auto-inject
+at session start. All memory writes are append-only — nothing is ever deleted.
 
 ---
 
@@ -188,7 +219,7 @@ Goodbye and happy studying! 🎓
 
 ## Testing
 
-Execute the automated test suite with pytest (58 unit and E2E tests):
+Execute the automated test suite with pytest (109 unit and E2E tests):
 ```bash
 # Run all tests
 pytest
@@ -232,9 +263,10 @@ docker run -it --rm \
   - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
   - 58 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, the CLI REPL, and study ingestion workflows)
   - Containerization with `Dockerfile` and `compose.yaml`
-- [ ] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
-  - Dynamic MCP client integration and runtime tool discovery
-  - Custom non-trivial MCP tool extension
+- [x] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
+  - Internet research aggregation and safe Obsidian vault MCP tools
+  - Local ToolRegistry bridge for agent access plus stdio MCP server
+  - Dynamic MCP client integration and persistent long-term memory remain next steps
   - Persistent long-term memory across sessions
 - [ ] **Week 3: Observability, Permissions, and Sub-Agents**
   - Prometheus metrics instrumentation and dashboard

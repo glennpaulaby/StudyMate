@@ -15,6 +15,10 @@ dependencies = [
     "openai>=1.30.0",
     "rich>=13.7.0",
     "pypdf>=4.0.0",
+    "mcp>=1.9.0,<2.0",
+    "prompt-toolkit>=3.0.40",
+    "questionary>=2.0.0",
+    "sqliteai-vector>=1.1.0",
 ]
 
 

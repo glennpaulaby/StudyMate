@@ -62,6 +62,11 @@ class ToolRegistry:
             logger.warning(f"Overwriting existing tool registration: {tool.name}")
         self._tools[tool.name] = tool
 
+    @property
+    def tools(self) -> Dict[str, BaseTool]:
+        """Returns the dictionary of registered tools."""
+        return self._tools
+
     def get(self, name: str) -> Optional[BaseTool]:
         """Retrieves a registered tool by name."""
         return self._tools.get(name)
