@@ -64,6 +64,21 @@ def create_mcp_server(
         """Append text to a Markdown note in the configured Obsidian vault."""
         return vault.append_note(path, content)
 
+    @server.tool()
+    def obsidian_get_outgoing_links(path: str) -> str:
+        """Extract all [[wikilinks]] from a Markdown note."""
+        return vault.get_outgoing_links(path)
+
+    @server.tool()
+    def obsidian_get_backlinks(path: str) -> str:
+        """Find all notes in the vault that link to the specified note via [[wikilinks]]."""
+        return vault.get_backlinks(path)
+
+    @server.tool()
+    def obsidian_insert_into_section(path: str, heading: str, content: str) -> str:
+        """Insert content at the end of a specific Markdown section/heading."""
+        return vault.insert_into_section(path, heading, content)
+
     return server
 
 

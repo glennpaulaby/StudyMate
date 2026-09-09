@@ -229,6 +229,94 @@ class EditNoteTool(_VaultTool):
         return self.service.edit_note(path, target, replacement)
 
 
+class GetOutgoingLinksTool(_VaultTool):
+    @property
+    def name(self) -> str:
+        return "obsidian_get_outgoing_links"
+
+    @property
+    def description(self) -> str:
+        return "Extract all [[wikilinks]] from a Markdown note in the configured Obsidian vault."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Vault-relative path to the Markdown note",
+                }
+            },
+            "required": ["path"],
+        }
+
+    def execute(self, path: str, **kwargs: Any) -> str:
+        return self.service.get_outgoing_links(path)
+
+
+class GetBacklinksTool(_VaultTool):
+    @property
+    def name(self) -> str:
+        return "obsidian_get_backlinks"
+
+    @property
+    def description(self) -> str:
+        return "Find all Markdown notes in the vault that link to the specified note via [[wikilinks]]."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Vault-relative path to the target note",
+                }
+            },
+            "required": ["path"],
+        }
+
+    def execute(self, path: str, **kwargs: Any) -> str:
+        return self.service.get_backlinks(path)
+
+
+class InsertIntoSectionTool(_VaultTool):
+    @property
+    def name(self) -> str:
+        return "obsidian_insert_into_section"
+
+    @property
+    def description(self) -> str:
+        return "Insert content at the end of a specific Markdown section (heading) in an existing note."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Vault-relative path to the note",
+                },
+                "heading": {
+                    "type": "string",
+                    "description": "Section heading title, with or without leading '#'",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content to insert at the end of the section",
+                },
+            },
+            "required": ["path", "heading", "content"],
+        }
+
+    def execute(
+        self, path: str, heading: str, content: str, **kwargs: Any
+    ) -> str:
+        return self.service.insert_into_section(path, heading, content)
+
+
 def register_mcp_tools(
     registry: ToolRegistry,
     vault_path: str | Path,
@@ -246,3 +334,6 @@ def register_mcp_tools(
     registry.register(WriteNoteTool(vault))
     registry.register(AppendNoteTool(vault))
     registry.register(EditNoteTool(vault))
+    registry.register(GetOutgoingLinksTool(vault))
+    registry.register(GetBacklinksTool(vault))
+    registry.register(InsertIntoSectionTool(vault))

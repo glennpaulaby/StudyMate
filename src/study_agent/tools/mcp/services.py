@@ -56,32 +56,132 @@ class _SearchResultParser(HTMLParser):
 
 
 class _WebPageParser(HTMLParser):
-    """Extracts readable text and links from an HTML page."""
+    """Extracts structured Markdown and links from an HTML page."""
 
     def __init__(self) -> None:
         super().__init__()
         self.text_parts: list[str] = []
         self.links: list[str] = []
+        self._output: list[str] = []
         self._skip_depth = 0
+        self._in_pre = False
+        self._link_url: str | None = None
+        self._link_text: list[str] = []
+        self._list_stack: list[str] = []
+        self._ol_counters: list[int] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
-        if tag in {"script", "style", "noscript", "svg", "nav", "footer"}:
+        if tag in {"script", "style", "noscript", "svg", "nav", "footer", "header", "aside", "form"}:
             self._skip_depth += 1
-        elif tag == "a" and self._skip_depth == 0:
+            return
+        if self._skip_depth > 0:
+            return
+
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            level = int(tag[1])
+            self._output.append(f"\n\n{'#' * level} ")
+        elif tag in {"p", "section", "article"}:
+            self._output.append("\n\n")
+        elif tag == "br":
+            self._output.append("\n")
+        elif tag == "hr":
+            self._output.append("\n\n---\n\n")
+        elif tag == "blockquote":
+            self._output.append("\n\n> ")
+        elif tag == "pre":
+            self._in_pre = True
+            self._output.append("\n\n```\n")
+        elif tag == "code" and not self._in_pre:
+            self._output.append("`")
+        elif tag in {"strong", "b"}:
+            self._output.append("**")
+        elif tag in {"em", "i"}:
+            self._output.append("*")
+        elif tag == "ul":
+            self._list_stack.append("ul")
+            self._output.append("\n")
+        elif tag == "ol":
+            self._list_stack.append("ol")
+            self._ol_counters.append(1)
+            self._output.append("\n")
+        elif tag == "li":
+            indent = "  " * max(0, len(self._list_stack) - 1)
+            if self._list_stack and self._list_stack[-1] == "ol" and self._ol_counters:
+                idx = self._ol_counters[-1]
+                self._ol_counters[-1] += 1
+                self._output.append(f"\n{indent}{idx}. ")
+            else:
+                self._output.append(f"\n{indent}- ")
+        elif tag == "a":
             href = attributes.get("href")
             if href:
                 self.links.append(href)
+                self._link_url = href
+                self._link_text = []
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in {"script", "style", "noscript", "svg", "nav", "footer"}:
+        if tag in {"script", "style", "noscript", "svg", "nav", "footer", "header", "aside", "form"}:
             self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if self._skip_depth > 0:
+            return
+
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "article", "blockquote"}:
+            self._output.append("\n\n")
+        elif tag == "pre":
+            self._in_pre = False
+            self._output.append("\n```\n\n")
+        elif tag == "code" and not self._in_pre:
+            self._output.append("`")
+        elif tag in {"strong", "b"}:
+            self._output.append("**")
+        elif tag in {"em", "i"}:
+            self._output.append("*")
+        elif tag == "ul":
+            if self._list_stack:
+                self._list_stack.pop()
+            self._output.append("\n")
+        elif tag == "ol":
+            if self._list_stack:
+                self._list_stack.pop()
+            if self._ol_counters:
+                self._ol_counters.pop()
+            self._output.append("\n")
+        elif tag == "a" and self._link_url is not None:
+            text = "".join(self._link_text).strip()
+            if text:
+                self._output.append(f"[{text}]({self._link_url})")
+            else:
+                self._output.append(self._link_url)
+            self._link_url = None
+            self._link_text = []
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth == 0:
-            text = re.sub(r"\s+", " ", data).strip()
-            if text:
-                self.text_parts.append(text)
+        if self._skip_depth > 0:
+            return
+        if self._in_pre:
+            self._output.append(data)
+            self.text_parts.append(data.strip())
+            return
+        if self._link_url is not None:
+            self._link_text.append(data)
+            self.text_parts.append(data.strip())
+            return
+
+        cleaned = re.sub(r"[ \t\r\f\v]+", " ", data)
+        if cleaned:
+            self._output.append(cleaned)
+            part = cleaned.strip()
+            if part:
+                self.text_parts.append(part)
+
+    def get_markdown(self) -> str:
+        """Returns normalized Markdown string."""
+        raw = "".join(self._output)
+        lines = [line.rstrip() for line in raw.splitlines()]
+        cleaned = "\n".join(lines)
+        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 class WebResearchService:
@@ -235,7 +335,7 @@ class WebResearchService:
                 {
                     "url": url,
                     "depth": current_depth,
-                    "content": " ".join(parser.text_parts)[:8000],
+                    "content": (parser.get_markdown() or " ".join(parser.text_parts))[:8000],
                 }
             )
             if current_depth < depth:
@@ -390,3 +490,129 @@ class ObsidianVaultService:
                 handle.write("\n")
             handle.write(content)
         return json.dumps({"path": path.replace("\\", "/"), "appended": True})
+
+    @staticmethod
+    def _extract_wikilinks(content: str) -> list[str]:
+        """Extracts unique wikilink targets in order of appearance."""
+        raw_links = re.findall(r"\[\[(.*?)\]\]", content)
+        seen: set[str] = set()
+        targets: list[str] = []
+        for raw in raw_links:
+            target = raw.split("|")[0].split("#")[0].strip()
+            if target and target not in seen:
+                seen.add(target)
+                targets.append(target)
+        return targets
+
+    def get_outgoing_links(self, path: str) -> str:
+        """Extracts all [[wikilinks]] from a Markdown note."""
+        note = self._resolve(path)
+        if note.suffix.lower() != ".md":
+            raise ValueError("Only Markdown notes can be inspected")
+        if not note.is_file():
+            raise FileNotFoundError(f"Note not found: {path}")
+        content = note.read_text(encoding="utf-8")
+        links = self._extract_wikilinks(content)
+        return json.dumps(
+            {
+                "path": path.replace("\\", "/"),
+                "outgoing_links": links,
+                "count": len(links),
+            },
+            ensure_ascii=False,
+        )
+
+    def get_backlinks(self, path: str) -> str:
+        """Finds all notes in the vault that link to the specified note via [[wikilinks]]."""
+        target_note = self._resolve(path)
+        if target_note.suffix.lower() != ".md":
+            raise ValueError("Only Markdown notes can be inspected")
+        if not target_note.is_file():
+            raise FileNotFoundError(f"Note not found: {path}")
+
+        target_stem = target_note.stem.casefold()
+        target_name = target_note.name.casefold()
+        target_rel = str(target_note.relative_to(self.root)).replace("\\", "/").casefold()
+        target_rel_no_ext = str(target_note.relative_to(self.root).with_suffix("")).replace("\\", "/").casefold()
+        target_identifiers = {target_stem, target_name, target_rel, target_rel_no_ext}
+
+        backlinks: list[str] = []
+        for candidate in sorted(self.root.rglob("*.md")):
+            if not candidate.is_file() or candidate.resolve() == target_note.resolve():
+                continue
+            content = candidate.read_text(encoding="utf-8", errors="replace")
+            links = self._extract_wikilinks(content)
+            if any(link.casefold() in target_identifiers for link in links):
+                backlinks.append(str(candidate.relative_to(self.root)).replace("\\", "/"))
+
+        return json.dumps(
+            {
+                "path": path.replace("\\", "/"),
+                "backlinks": backlinks,
+                "count": len(backlinks),
+            },
+            ensure_ascii=False,
+        )
+
+    def insert_into_section(self, path: str, heading: str, content: str) -> str:
+        """Inserts content at the end of a specific Markdown heading section."""
+        note = self._resolve(path)
+        if note.suffix.lower() != ".md":
+            raise ValueError("Only Markdown notes can be edited")
+        if not note.is_file():
+            raise FileNotFoundError(f"Note not found: {path}")
+
+        clean_heading = heading.strip()
+        if not clean_heading:
+            raise ValueError("heading must not be empty")
+
+        clean_heading_text = re.sub(r"^#+\s*", "", clean_heading).strip()
+        if not clean_heading_text:
+            raise ValueError("heading text must not be empty")
+
+        lines = note.read_text(encoding="utf-8").splitlines()
+
+        heading_idx = -1
+        heading_level = 0
+        for idx, line in enumerate(lines):
+            match = re.match(r"^(#{1,6})\s+(.*?)$", line.strip())
+            if match and match.group(2).strip().casefold() == clean_heading_text.casefold():
+                heading_idx = idx
+                heading_level = len(match.group(1))
+                break
+
+        if heading_idx == -1:
+            raise ValueError(f"Heading '{heading}' not found in note: {path}")
+
+        insert_idx = len(lines)
+        for idx in range(heading_idx + 1, len(lines)):
+            match = re.match(r"^(#{1,6})\s+", lines[idx].strip())
+            if match and len(match.group(1)) <= heading_level:
+                insert_idx = idx
+                break
+
+        prefix_lines = list(lines[:insert_idx])
+        while prefix_lines and prefix_lines[-1].strip() == "" and len(prefix_lines) > heading_idx + 1:
+            prefix_lines.pop()
+
+        suffix_lines = lines[insert_idx:]
+        content_lines = content.strip().splitlines()
+
+        new_lines: list[str] = list(prefix_lines)
+        new_lines.extend(content_lines)
+        if suffix_lines:
+            new_lines.append("")
+            new_lines.extend(suffix_lines)
+        else:
+            new_lines.append("")
+
+        note.write_text("\n".join(new_lines), encoding="utf-8")
+        return json.dumps(
+            {
+                "path": path.replace("\\", "/"),
+                "heading": heading,
+                "inserted": True,
+            },
+            ensure_ascii=False,
+        )
+
