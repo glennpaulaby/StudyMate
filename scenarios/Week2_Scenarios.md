@@ -76,7 +76,7 @@ Goal: prove long sessions don't die at the context wall.
    checkpoint is visible in history and persisted to the thread.
 4. Auto path: same, but keep chatting past ~80% instead of typing `/compact`.
 
-## 5. Web research MCP — search, domain filter, deep crawl (B. Putra)
+## 5. Web research MCP : search, domain filter, deep crawl (B. Putra)
 
 Goal: prove the agent can search the live web, target specific domains, crawl linked pages, and ingest structured Markdown without third-party search API keys.
 
@@ -93,7 +93,7 @@ Goal: prove the agent can search the live web, target specific domains, crawl li
    - Observe: agent calls `research_topic(..., depth=1, max_pages=3)`, crawling linked same-site pages.
    - **Pass:** extracted content is formatted as clean Markdown (`# Headings`, `- Lists`, ```` ```code``` ````); boilerplate like `<script>`, `<style>`, and `<nav>` is stripped.
 
-## 6. Obsidian MCP — graph traversal, section editing, stdio server (B. Putra)
+## 6. Obsidian MCP : graph traversal, section editing, stdio server (B. Putra)
 
 Goal: prove safe, non-destructive vault operations, knowledge graph traversal via wikilinks, section-level editing, and external FastMCP stdio hosting.
 
@@ -119,7 +119,7 @@ Goal: prove safe, non-destructive vault operations, knowledge graph traversal vi
 
 Also demoable: autocomplete dropdown in REPL for slash commands & tool names (`prompt_toolkit`), launcher window (`studymate-window`).
 
-## 7. Multi-step autonomous scenario — Exam prep & knowledge expansion (G. Aby)
+## 7. Multi-step autonomous scenario : Exam prep & knowledge expansion (G. Aby)
 
 Goal: prove autonomous multi-step reasoning orchestrating Long-Term Memory, Custom MCP tools, and Web Research without human intervention. (Formal benchmark: `tests/e2e/test_mcp_memory_scenario.py`).
 
