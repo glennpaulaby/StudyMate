@@ -43,7 +43,7 @@ from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LE
 from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
 from study_agent.tools.mcp import register_mcp_tools
-from study_agent.tools.mcp.services import WebResearchService
+from study_agent.tools.mcp.external import ExternalMCPService
 
 console = Console()
 
@@ -692,8 +692,10 @@ def run_cli(
             register_mcp_tools(
                 registry,
                 vault_path=vault_path,
-                search_service=WebResearchService(app_config.tools.mcp.search_endpoint),
-                max_results=app_config.tools.mcp.max_results,
+                external_service=ExternalMCPService(
+                    command=app_config.tools.mcp.search_command,
+                    args=app_config.tools.mcp.search_args,
+                ),
             )
 
     engine = AgentEngine(

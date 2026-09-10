@@ -33,14 +33,21 @@ class FilesystemToolConfig(BaseModel):
 
 
 class MCPToolConfig(BaseModel):
-    """Configuration for internet research and Obsidian MCP tools."""
+    """Configuration for external web-search and Obsidian MCP tools."""
     enabled: bool = Field(default=True, description="Whether MCP-backed tools are registered")
     vault_path: str = Field(default="./workspace/", description="Obsidian vault path")
-    search_endpoint: str = Field(
-        default="https://html.duckduckgo.com/html/",
-        description="HTML search endpoint used by the research tool",
+    search_command: str = Field(
+        default="uvx",
+        description="Executable used to start the external web-search MCP server",
     )
-    max_results: int = Field(default=5, ge=1, le=10, description="Maximum research sources returned")
+    search_args: List[str] = Field(
+        default_factory=lambda: [
+            "--with",
+            "duckduckgo-mcp-server[browser]",
+            "duckduckgo-mcp-server",
+        ],
+        description="Arguments for the external web-search MCP server",
+    )
 
 
 class ToolsConfig(BaseModel):

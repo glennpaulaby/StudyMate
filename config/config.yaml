@@ -36,8 +36,12 @@ tools:
     enabled: true
     # The workspace root is the default Obsidian vault.
     vault_path: "./workspace/"
-    search_endpoint: "https://html.duckduckgo.com/html/"
-    max_results: 5
+    # The external server is started on demand over stdio.
+    search_command: "uvx"
+    search_args:
+      - "--with"
+      - "duckduckgo-mcp-server[browser]"
+      - "duckduckgo-mcp-server"
 
 memory:
   enabled: true
