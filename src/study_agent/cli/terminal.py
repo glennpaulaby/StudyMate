@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 from pathlib import Path
 from typing import Optional
 
@@ -30,12 +30,14 @@ from study_agent.core.engine import AgentEngine
 from study_agent.core.types import ToolCall
 from study_agent.llm.base import BaseLLMClient
 from study_agent.llm.client import OpenAICompatibleLLMClient
+from study_agent.core.compaction import estimate_tokens, maybe_compact, SUMMARY_PREFIX
 from study_agent.memory.embeddings import Embedder, InnKubeEmbedder
 from study_agent.memory.rerank import InnKubeReranker, Reranker
 from study_agent.memory.store import MemoryStore
 from study_agent.memory.threads import generate_thread_name, resolve_thread
 from study_agent.memory.tools import register_memory_tools
 from study_agent.study.griller import SocraticGriller
+from study_agent.study.procedures import DRAFT, format_procedures_block, match_procedures
 from study_agent.study.linter import VaultLintReport, VaultLinter
 from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
 from study_agent.tools.base import ToolRegistry
@@ -47,6 +49,12 @@ console = Console()
 
 STUDYMATE_STYLE = Style.from_dict({
     "prompt": "bold ansicyan",
+    # Kill prompt_toolkit's default `reverse` on the toolbar window,
+    # otherwise the whole row paints as a full-width bar.
+    "bottom-toolbar": "noreverse",
+    "toolbar.ok": "#6b7280",
+    "toolbar.warn": "#e5c07b",
+    "toolbar.bad": "#e06c75",
     "completion-menu.completion": "bg:#1e1e2e #cdd6f4",
     "completion-menu.completion.current": "bold bg:#313244 #f9e2af",
     "completion-menu.meta.completion": "bg:#181825 #a6adc8",
@@ -72,6 +80,7 @@ class StudyMateCompleter(Completer):
         ("/new", "Start a new conversation thread"),
         ("/archive-this", "Archive the current active chat thread"),
         ("/archive-all", "Archive all chat threads"),
+        ("/compact", "Summarize history into a checkpoint now"),
         ("/clear", "Reset in-memory conversation history"),
         ("/config", "View active configuration settings"),
         ("/exit", "Exit StudyMate"),
@@ -115,6 +124,116 @@ class StudyMateCompleter(Completer):
                     )
 
 
+def _human_tokens(n: int) -> str:
+    """Compact token counts: 12400 -> '12.4k', 900 -> '900'."""
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def context_usage_bar(used: int, window: int, threshold: float, width: int = 20) -> str:
+    """Pure usage bar: green below threshold, yellow past it, red past 95%.
+
+    Returns Rich markup like `[dim][green]██████░░░░[/green] 12.4k/262k (5%)[/dim]`.
+    """
+    window = max(1, window)
+    frac = min(1.0, max(0.0, used / window))
+    filled = int(round(frac * width))
+    if frac >= 0.95:
+        color = "red"
+    elif used >= threshold * window:
+        color = "yellow"
+    else:
+        color = "green"
+    bar = "█" * filled + "░" * (width - filled)
+    return (
+        f"[dim][{color}]{bar}[/{color}] {_human_tokens(used)}/{_human_tokens(window)} "
+        f"({frac * 100:.0f}%)[/dim]"
+    )
+
+
+def print_context_usage(engine: AgentEngine, context: ContextManager) -> None:
+    """Prints the live context footprint (fallback when no toolbar; never raises)."""
+    try:
+        from study_agent.core.compaction import compaction_threshold_tokens
+
+        schemas = engine.tool_registry.list_schemas() if engine.tool_registry else None
+        used = estimate_tokens(context.get_messages(), schemas)
+        window = engine._window()
+        fire_line = compaction_threshold_tokens(window, engine.compaction)
+        line = context_usage_bar(used, window, engine.compaction.threshold)
+        if used >= fire_line:
+            line += " [yellow]— approaching compact threshold[/yellow]"
+        console.print(line)
+    except Exception:
+        pass
+
+
+def format_toolbar_text(
+    model: str, thread_name: Optional[str], used: int, window: int, threshold: float
+) -> str:
+    """Pure status-line text: model | thread | context footprint (no markup)."""
+    window = max(1, window)
+    frac = min(1.0, max(0.0, used / window))
+    thread = thread_name or "new thread"
+    return f"{model} | {thread} | ctx {_human_tokens(used)}/{_human_tokens(window)} ({frac * 100:.0f}%)"
+
+
+def toolbar_level(used: int, window: int, threshold: float) -> str:
+    """Band for toolbar styling: ok < threshold <= warn < 95% <= bad."""
+    window = max(1, window)
+    frac = min(1.0, max(0.0, used / window))
+    if frac >= 0.95:
+        return "bad"
+    if used >= threshold * window:
+        return "warn"
+    return "ok"
+
+
+def create_input_session(toolbar_fn, completer=None) -> Optional[object]:
+    """prompt_toolkit session: completion + subtle status toolbar, one style.
+
+    The toolbar uses foreground-only colors (no backgrounds) so it reads as a
+    dim status line, never a full-width bar. Returns None outside a TTY or
+    when prompt_toolkit is unavailable — callers fall back to console.input
+    (plus footer-line usage display).
+    """
+    import sys as _sys
+
+    if not bool(getattr(_sys.stdin, "isatty", lambda: False)()):
+        return None
+    try:
+        from prompt_toolkit import PromptSession as _Session
+        from prompt_toolkit.formatted_text import FormattedText as _FT
+
+        def _toolbar():
+            try:
+                text, level = toolbar_fn()
+            except Exception:
+                return ""
+            if not text:
+                return ""
+            return _FT([(f"class:toolbar.{level}", f" {text} ")])
+
+        return _Session(completer=completer, style=STUDYMATE_STYLE, bottom_toolbar=_toolbar)
+    except (ImportError, Exception):
+        return None
+
+
+def read_student_input(session) -> str:
+    """Reads one REPL line via the session (styled) or Rich fallback."""
+    if (
+        session is not None
+        and getattr(console.input, "_mock_wraps", None) is None
+        and getattr(console.input, "side_effect", None) is None
+    ):
+        try:
+            return session.prompt([("class:prompt", "student > ")], complete_while_typing=True).strip()
+        except (KeyboardInterrupt, EOFError):
+            raise
+        except Exception:
+            pass
+    return console.input("[bold cyan]student > [/bold cyan]").strip()
+
+
 
 def print_banner(config: AppConfig) -> None:
     """Displays the welcome banner in the terminal."""
@@ -142,6 +261,7 @@ def print_help() -> None:
     table.add_row(escape("/new [name]"), "Start a new thread (default on first message)")
     table.add_row(escape("/archive-this"), "Archive the current thread (tombstone, no delete)")
     table.add_row(escape("/archive-all"), "Archive ALL threads (asks for confirmation)")
+    table.add_row("/compact", "Summarize history into a checkpoint now (same thread)")
     table.add_row("/clear", "Reset in-memory history (thread history stays saved)")
     table.add_row("/config", "Display current configuration parameters")
     table.add_row("/exit, /quit", "Exit StudyMate")
@@ -161,7 +281,10 @@ def format_local_time(iso_ts: str) -> str:
 def render_message(role: str, content: Optional[str]) -> None:
     """Renders one chat message with a speaker prefix (student > / studymate >)."""
     if role == "user":
-        console.print("[bold cyan]student > [/bold cyan]" + escape(content or ""))
+        if (content or "").startswith(SUMMARY_PREFIX):
+            console.print("[dim]compacted context > [/dim]" + escape(content or ""))
+        else:
+            console.print("[bold cyan]student > [/bold cyan]" + escape(content or ""))
     elif role == "assistant":
         if (content or "").strip():
             console.print("[bold magenta]studymate > [/bold magenta]", end="")
@@ -531,6 +654,8 @@ def print_config(config: AppConfig) -> None:
     table.add_row("Artifacts Dir (Write)", config.agent.artifacts_dir)
     table.add_row("Memory Enabled", str(config.memory.enabled))
     table.add_row("Memory DB", config.memory.db_path)
+    table.add_row("Context Window", f"{config.compaction.context_windows.get(config.llm.model, config.compaction.default_context_window)} (model: {config.llm.model})")
+    table.add_row("Compact Threshold", f"{config.compaction.threshold} (~{int(config.compaction.context_windows.get(config.llm.model, config.compaction.default_context_window) * config.compaction.threshold)} tokens)")
     table.add_row("API Key Set?", "Yes" if config.llm.api_key else "No (Set INNKUBE_API_KEY)")
 
     console.print(table)
@@ -571,7 +696,13 @@ def run_cli(
                 max_results=app_config.tools.mcp.max_results,
             )
 
-    engine = AgentEngine(llm_client=client, tool_registry=registry, config=app_config.agent)
+    engine = AgentEngine(
+        llm_client=client,
+        tool_registry=registry,
+        config=app_config.agent,
+        compaction=app_config.compaction,
+        llm_base_url=app_config.llm.base_url,
+    )
 
     memory_store: Optional[MemoryStore] = None
     if app_config.memory.enabled:
@@ -601,13 +732,16 @@ def run_cli(
             embedder = None
             reranker = None
     register_memory_tools(registry, memory_store, embedder, reranker)
+    facts_note_base = ""
     if memory_store is not None and app_config.memory.max_inject > 0:
         recent_facts = memory_store.recall_facts("", limit=app_config.memory.max_inject)
         if recent_facts:
             lines = ["Relevant long-term memory (persisted facts, most recent first):"]
             lines += [f"- [{f.topic}] {f.fact}" for f in recent_facts]
             lines.append("Use memory_recall to search all facts just-in-time when personalizing.")
-            context.inject_system_note("\n".join(lines))
+            facts_note_base = "\n".join(lines)
+            context.inject_system_note(facts_note_base)
+    procedures_dir = Path(app_config.agent.artifacts_dir) / "procedures"
     active_thread_id: Optional[str] = None
 
     def ensure_thread(first_text: str) -> Optional[str]:
@@ -621,14 +755,30 @@ def run_cli(
         console.print(f"[dim]New thread: {escape(name)} ({escape(thread.id[:8])})[/dim]")
         return active_thread_id
 
-    session = None
+    def _toolbar_data():
+        """Live (text, level) for the sticky status toolbar; empty text hides it."""
+        schemas = engine.tool_registry.list_schemas() if engine.tool_registry else None
+        used = estimate_tokens(context.get_messages(), schemas)
+        window = engine._window()
+        thread_name = None
+        if memory_store is not None and active_thread_id:
+            thread = memory_store.get_thread(active_thread_id, include_archived=True)
+            thread_name = thread.name if thread else None
+        text = format_toolbar_text(
+            app_config.llm.model, thread_name, used, window, engine.compaction.threshold
+        )
+        return text, toolbar_level(used, window, engine.compaction.threshold)
+
+    completer = None
     try:
         # Check if running in a real interactive terminal
         if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             completer = StudyMateCompleter(registry)
-            session = PromptSession(completer=completer, style=STUDYMATE_STYLE)
     except Exception:
-        session = None
+        completer = None
+
+    input_session = create_input_session(_toolbar_data, completer=completer)
+    use_toolbar = input_session is not None
 
     print_banner(app_config)
 
@@ -640,16 +790,7 @@ def run_cli(
 
     while True:
         try:
-            # If console.input is mocked (e.g. by unit tests) or session not available, use console.input
-            if session is not None and getattr(console.input, "_mock_wraps", None) is None and getattr(console.input, "side_effect", None) is None:
-                try:
-                    raw_input = session.prompt([("class:prompt", "student > ")], complete_while_typing=True)
-                except Exception:
-                    raw_input = console.input("[bold cyan]student > [/bold cyan]")
-            else:
-                raw_input = console.input("[bold cyan]student > [/bold cyan]")
-
-            user_input = raw_input.strip()
+            user_input = read_student_input(input_session)
 
             if not user_input:
                 continue
@@ -682,6 +823,8 @@ def run_cli(
                             f"({len(history)} messages restored).[/green]\n"
                         )
                         render_history(history)
+                        if not use_toolbar:
+                            print_context_usage(engine, context)
                 continue
             elif user_input.lower().startswith("/thread"):
                 if memory_store is None:
@@ -720,6 +863,8 @@ def run_cli(
                     f"({len(history)} messages restored).[/green]\n"
                 )
                 render_history(history)
+                if not use_toolbar:
+                    print_context_usage(engine, context)
                 continue
             elif user_input.lower().startswith("/new"):
                 parts = user_input.split(maxsplit=1)
@@ -807,6 +952,29 @@ def run_cli(
                 context.clear()
                 console.print("[green]✓ Conversation history reset.[/green]")
                 continue
+            elif user_input.lower() == "/compact":
+                before = estimate_tokens(context.get_messages())
+                if len(context.get_messages()) <= 2:
+                    console.print("[yellow]Nothing worth compacting yet.[/yellow]")
+                    continue
+                with console.status("[bold green]Compacting conversation...[/bold green]", spinner="dots"):
+                    compacted, _, after = maybe_compact(
+                        context.get_messages(),
+                        client,
+                        app_config.compaction,
+                        force=True,
+                        state=engine.compaction_state,
+                    )
+                if not compacted:
+                    console.print("[yellow]Compaction did not run (breaker open or summarizer failed).[/yellow]")
+                    continue
+                if memory_store is not None and active_thread_id is not None:
+                    try:
+                        memory_store.add_message(active_thread_id, context.get_messages()[1])
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: summary not persisted: {e}[/yellow]")
+                console.print(f"[green]✓ Compacted: ~{before} → ~{after} tokens (est.). Same thread, history saved.[/green]")
+                continue
             elif user_input.lower() == "/config":
                 print_config(app_config)
                 continue
@@ -815,6 +983,25 @@ def run_cli(
                 console.print(
                     f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{escape(tc.name)}[/yellow] "
                     f"[dim]{escape(str(tc.arguments))}[/dim]"
+                )
+
+            # Procedures: approved routines merge into the system note (template-safe,
+            # idempotent replace); drafts are surfaced, never silently followed.
+            approved = match_procedures(procedures_dir, user_input)
+            if approved:
+                note = facts_note_base
+                note += ("\n\n" if note else "") + format_procedures_block(approved)
+                context.inject_system_note(note)
+            elif facts_note_base:
+                context.inject_system_note(facts_note_base)
+            else:
+                context.reset_injected_note()
+            drafts = match_procedures(procedures_dir, user_input, statuses=(DRAFT,))
+            if drafts:
+                names = ", ".join(f"'{escape(d.name)}'" for d in drafts)
+                console.print(
+                    f"[dim]💡 Draft routine(s) match ({names}) — say the word and I'll follow "
+                    f"it, or approve it by flipping status to approved.[/dim]"
                 )
 
             ensure_thread(user_input)
@@ -848,6 +1035,8 @@ def run_cli(
                 console.print(f"[bold red]Agent stopped:[/bold red] {result.error_message or 'The agent did not return a response.'}")
             else:
                 console.print("[bold red]The agent stopped without returning a response. Please try again.[/bold red]")
+            if not use_toolbar:
+                print_context_usage(engine, context)
             console.print()
 
         except (KeyboardInterrupt, EOFError):

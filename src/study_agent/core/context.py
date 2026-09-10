@@ -110,6 +110,12 @@ class ContextManager:
             self._init_system_prompt()
         return self.messages[0]
 
+    def reset_injected_note(self) -> None:
+        """Clears the merged note so a stale per-turn block never leaks forward."""
+        self._injected_note = None
+        if self.messages and self.messages[0].role == Role.SYSTEM:
+            self.messages[0] = self._render_system_message()
+
     def clear(self, keep_system_prompt: bool = True) -> None:
         """Resets conversation history."""
         if keep_system_prompt:

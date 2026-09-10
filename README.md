@@ -165,6 +165,7 @@ python -m study_agent.tools.mcp.server
 - `/new [name]` — Start a new thread (default on first message)
 - `/archive-this` — Archive the current thread (tombstone, no delete)
 - `/archive-all` — Archive ALL threads (asks for confirmation)
+- `/compact` — Summarize history into a checkpoint now (while staying on the same thread)
 - `/clear` — Reset in-memory history (thread history stays saved)
 - `/config` — View active runtime settings
 - `/exit, /quit` — Quit StudyMate
@@ -177,6 +178,21 @@ meaning-similar hits via `sqlite-vector` cosine search, reordered by the
 InnKube reranker (`memory_recall`). One API key covers chat, embeddings,
 and rerank (granted per model server-side). Top recent facts auto-inject
 at session start. All memory writes are append-only — nothing is ever deleted.
+
+#### Procedural Memory:
+Reusable routines live as markdown bundles in `workspace/artifacts/procedures/`
+(committed, reviewable). Each has triggers, scope, ordered steps, rationale,
+and a `draft/approved/archived` status. Matching approved routines inject
+automatically before the agent acts; drafts are surfaced for confirmation,
+never followed silently. Agent-distilled routines start as drafts for human
+approval; editing a file supersedes it (git is the version log).
+
+#### Context Compaction:
+Long sessions compact automatically at ~80% of the active model's window
+(resolved per model via `compaction.context_windows`, gateway discovery,
+or a conservative default — see `/config`), or on demand with `/compact`.
+Old tool outputs blank first (free); older turns then fold into one summary
+in the same thread. Nothing is deleted: the summary persists to the thread.
 
 ---
 
