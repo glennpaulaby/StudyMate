@@ -6,73 +6,41 @@ from pathlib import Path
 from typing import Any
 
 from study_agent.tools.base import BaseTool, ToolRegistry
-from study_agent.tools.mcp.services import ObsidianVaultService, WebResearchService
+from study_agent.tools.mcp.external import ExternalMCPService
+from study_agent.tools.mcp.services import ObsidianVaultService
 
 
-class ResearchTopicTool(BaseTool):
-    """Searches the public web and aggregates source metadata for a topic."""
+class ExternalMCPTool(BaseTool):
+    """Adapts one tool from an external MCP server to the local registry."""
 
-    def __init__(self, service: WebResearchService, max_results: int = 5) -> None:
+    def __init__(
+        self,
+        service: ExternalMCPService,
+        name: str,
+        remote_name: str,
+        description: str,
+        parameters: dict[str, Any],
+    ) -> None:
         self.service = service
-        self.max_results = max_results
+        self._name = name
+        self.remote_name = remote_name
+        self._description = description
+        self._parameters = parameters
 
     @property
     def name(self) -> str:
-        return "research_topic"
+        return self._name
 
     @property
     def description(self) -> str:
-        return "Search multiple websites for a study topic and optionally follow same-site links for deeper context."
+        return self._description
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic to research"},
-                "max_results": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10,
-                    "default": self.max_results,
-                },
-                "domains": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional domains; each domain is searched independently",
-                },
-                "depth": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 2,
-                    "default": 1,
-                    "description": "Same-site link depth; 0 returns search results only",
-                },
-                "max_pages": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 20,
-                    "default": 10,
-                    "description": "Maximum pages to fetch per source during deep research",
-                },
-            },
-            "required": ["topic"],
-        }
+        return self._parameters
 
-    def execute(
-        self,
-        topic: str,
-        max_results: int | None = None,
-        domains: list[str] | None = None,
-        depth: int = 1,
-        max_pages: int = 10,
-        **kwargs: Any,
-    ) -> str:
-        if depth:
-            return self.service.deep_search(
-                topic, max_results or self.max_results, domains, depth, max_pages
-            )
-        return self.service.search(topic, max_results or self.max_results, domains)
+    def execute(self, **kwargs: Any) -> str:
+        return self.service.call_tool(self.remote_name, kwargs)
 
 
 class _VaultTool(BaseTool):
@@ -320,12 +288,57 @@ class InsertIntoSectionTool(_VaultTool):
 def register_mcp_tools(
     registry: ToolRegistry,
     vault_path: str | Path,
-    search_service: WebResearchService | None = None,
-    max_results: int = 5,
+    external_service: ExternalMCPService | None = None,
 ) -> None:
-    """Registers both MCP capabilities as local agent tools."""
+    """Registers external web-search tools and local Obsidian tools."""
+    external = external_service or ExternalMCPService()
     registry.register(
-        ResearchTopicTool(search_service or WebResearchService(), max_results)
+        ExternalMCPTool(
+            external,
+            "web_search",
+            "search",
+            "Search DuckDuckGo for current web sources.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer", "minimum": 1, "default": 10},
+                    "region": {"type": "string", "description": "Optional region code, such as de-de or us-en"},
+                },
+                "required": ["query"],
+            },
+        )
+    )
+    registry.register(
+        ExternalMCPTool(
+            external,
+            "fetch_web_content",
+            "fetch_content",
+            "Fetch and parse the content of a web page returned by web_search.",
+            {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "start_index": {"type": "integer", "minimum": 0, "default": 0},
+                    "max_length": {"type": "integer", "minimum": 1, "default": 10000},
+                    "parse_mode": {"type": "string", "enum": ["text", "main", "markdown"]},
+                },
+                "required": ["url"],
+            },
+        )
+    )
+    registry.register(
+        ExternalMCPTool(
+            external,
+            "expand_web_link",
+            "expand_link",
+            "Expand a shortened DuckDuckGo result reference into its original URL.",
+            {
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+        )
     )
     vault = ObsidianVaultService(vault_path)
     registry.register(ListNotesTool(vault))

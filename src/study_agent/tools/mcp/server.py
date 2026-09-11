@@ -1,38 +1,23 @@
-"""MCP server exposing internet research and Obsidian vault tools."""
+"""MCP server exposing the local Obsidian vault tools."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from study_agent.tools.mcp.services import ObsidianVaultService, WebResearchService
+from study_agent.tools.mcp.services import ObsidianVaultService
 
 
 def create_mcp_server(
     vault_path: str | Path | None = None,
-    search_service: WebResearchService | None = None,
 ):
-    """Builds a FastMCP server with the two StudyMate capability groups."""
+    """Build a FastMCP server for the configured Obsidian vault."""
     from mcp.server.fastmcp import FastMCP
 
-    research = search_service or WebResearchService()
     vault = ObsidianVaultService(
         vault_path or os.getenv("OBSIDIAN_VAULT_PATH", "./workspace/")
     )
-    server = FastMCP("StudyMate Research and Obsidian")
-
-    @server.tool()
-    def research_topic(
-        topic: str,
-        max_results: int = 5,
-        domains: list[str] | None = None,
-        depth: int = 1,
-        max_pages: int = 10,
-    ) -> str:
-        """Search multiple websites and optionally dive into linked pages."""
-        if depth:
-            return research.deep_search(topic, max_results, domains, depth, max_pages)
-        return research.search(topic, max_results, domains)
+    server = FastMCP("StudyMate Obsidian")
 
     @server.tool()
     def obsidian_list_notes(prefix: str = "", limit: int = 100) -> str:

@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import httpx
 
 from study_agent.config.settings import AgentConfig, FilesystemToolConfig
 from study_agent.core.context import ContextManager
@@ -14,21 +13,16 @@ from study_agent.study.linter import VaultLinter
 from study_agent.study.templates import format_concept_note
 from study_agent.tools.base import ToolRegistry
 from study_agent.tools.filesystem import register_filesystem_tools
-from study_agent.tools.mcp.services import WebResearchService
+from study_agent.tools.mcp.external import ExternalMCPService
 from study_agent.tools.mcp.tools import register_mcp_tools
 
 
 class FakeMultiStepSearchClient:
-    def get(self, url: str) -> httpx.Response:
-        html = """
-        <a class="result__a" href="https://algorithms.org/bellman-ford">Bellman-Ford Cycles</a>
-        <div class="result__snippet">Bellman-Ford relaxes edges |V|-1 times and detects negative cycles by checking if a further relaxation reduces distance.</div>
-        """
-        return httpx.Response(
-            200,
-            text=html,
-            headers={"content-type": "text/html"},
-            request=httpx.Request("GET", url),
+    def call_tool(self, name: str, arguments: dict) -> str:
+        return (
+            "Found 1 search result: Bellman-Ford Cycles "
+            "https://algorithms.org/bellman-ford. "
+            "Bellman-Ford detects negative cycles after |V|-1 relaxations."
         )
 
 
@@ -81,8 +75,9 @@ def test_e2e_multistep_mcp_and_memory_scenario(tmp_path: Path):
     register_mcp_tools(
         registry,
         vault_path=artifacts_dir,
-        search_service=WebResearchService(client=FakeMultiStepSearchClient()),
+        external_service=ExternalMCPService(),
     )
+    registry.tools["web_search"].service = FakeMultiStepSearchClient()
     register_memory_tools(registry, store=store, embedder=embedder)
 
     # Script the MockLLM Multi-Step ReAct Sequence
@@ -142,11 +137,10 @@ def test_e2e_multistep_mcp_and_memory_scenario(tmp_path: Path):
         tool_calls=[
             ToolCall(
                 id="call_web_1",
-                name="research_topic",
+                name="web_search",
                 arguments={
-                    "topic": "Bellman-Ford negative cycle detection",
+                    "query": "Bellman-Ford negative cycle detection",
                     "max_results": 2,
-                    "depth": 0,
                 },
             )
         ],

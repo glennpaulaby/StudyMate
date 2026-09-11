@@ -18,7 +18,7 @@ COPY config/ config/
 
 # Install Python dependencies and package in editable mode
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir -e . uv
 
 # Ensure workspace directories exist
 RUN mkdir -p workspace/data workspace/artifacts

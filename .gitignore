@@ -64,4 +64,7 @@ uv.lock
 # Workspace runtime data (local dev database + study materials — never commit)
 workspace/artifacts/memory/
 workspace/data/
+workspace/artifacts/*
+# Exception: team-shared procedure bundles are curated, reviewable knowledge
+!workspace/artifacts/procedures/
 

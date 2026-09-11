@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List
 from pydantic import BaseModel, Field
 
 
@@ -33,14 +33,21 @@ class FilesystemToolConfig(BaseModel):
 
 
 class MCPToolConfig(BaseModel):
-    """Configuration for internet research and Obsidian MCP tools."""
+    """Configuration for external web-search and Obsidian MCP tools."""
     enabled: bool = Field(default=True, description="Whether MCP-backed tools are registered")
     vault_path: str = Field(default="./workspace/", description="Obsidian vault path")
-    search_endpoint: str = Field(
-        default="https://html.duckduckgo.com/html/",
-        description="HTML search endpoint used by the research tool",
+    search_command: str = Field(
+        default="uvx",
+        description="Executable used to start the external web-search MCP server",
     )
-    max_results: int = Field(default=5, ge=1, le=10, description="Maximum research sources returned")
+    search_args: List[str] = Field(
+        default_factory=lambda: [
+            "--with",
+            "duckduckgo-mcp-server[browser]",
+            "duckduckgo-mcp-server",
+        ],
+        description="Arguments for the external web-search MCP server",
+    )
 
 
 class ToolsConfig(BaseModel):
@@ -60,6 +67,20 @@ class MemoryConfig(BaseModel):
     max_inject: int = Field(default=5, ge=0, le=20, description="Top-N recent facts auto-injected at session start")
 
 
+class CompactionConfig(BaseModel):
+    """Context-window compaction (Claude/OpenCode-style, same-thread checkpoint)."""
+    enabled: bool = Field(default=True, description="Auto-compact when the window fills")
+    threshold: float = Field(default=0.8, ge=0.1, le=0.95, description="Fraction of window triggering compaction")
+    buffer: int = Field(default=20000, ge=0, description="Reserved headroom so the summary call itself fits")
+    keep_recent_messages: int = Field(default=10, ge=1, description="Recent tail kept verbatim on compact")
+    summary_max_tokens: int = Field(default=1000, ge=100, description="Cap for the generated summary")
+    max_consecutive_failures: int = Field(default=2, ge=1, description="Circuit breaker: stop after N failed compactions")
+    default_context_window: int = Field(default=128000, ge=8000, description="Conservative window for unknown models")
+    context_windows: Dict[str, int] = Field(
+        default_factory=dict, description="Explicit per-model context windows (override)"
+    )
+
+
 class ObservabilityConfig(BaseModel):
     """Logging and Prometheus telemetry settings."""
     log_level: str = Field(default="INFO", description="Logging verbosity")
@@ -73,4 +94,5 @@ class AppConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)

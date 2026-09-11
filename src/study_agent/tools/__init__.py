@@ -11,8 +11,8 @@ from study_agent.tools.filesystem import (
     register_filesystem_tools,
 )
 from study_agent.tools.mcp import (
+    ExternalMCPService,
     ObsidianVaultService,
-    WebResearchService,
     register_mcp_tools,
 )
 
@@ -28,7 +28,7 @@ __all__ = [
     "SearchTextTool",
     "EditFileTool",
     "register_filesystem_tools",
+    "ExternalMCPService",
     "ObsidianVaultService",
-    "WebResearchService",
     "register_mcp_tools",
 ]

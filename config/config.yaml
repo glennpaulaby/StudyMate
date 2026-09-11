@@ -36,14 +36,32 @@ tools:
     enabled: true
     # The workspace root is the default Obsidian vault.
     vault_path: "./workspace/"
-    search_endpoint: "https://html.duckduckgo.com/html/"
-    max_results: 5
+    # The external server is started on demand over stdio.
+    search_command: "uvx"
+    search_args:
+      - "--with"
+      - "duckduckgo-mcp-server[browser]"
+      - "duckduckgo-mcp-server"
 
 memory:
   enabled: true
   db_path: "./workspace/artifacts/memory/memory.db"
   max_load: 50
   max_inject: 5
+
+compaction:
+  enabled: true
+  threshold: 0.8
+  buffer: 20000
+  keep_recent_messages: 10
+  summary_max_tokens: 1000
+  max_consecutive_failures: 2
+  default_context_window: 128000
+  # Explicit per-model windows (override). Unknown models fall back to the
+  # default above with a startup warning — update here on InnKube rotations.
+  context_windows:
+    qwen-agentworld-35b-a3b: 262144
+    gemma4-31b-it: 131072
 
 observability:
   log_level: "INFO"

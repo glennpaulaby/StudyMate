@@ -24,10 +24,10 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
   - **No Deletion Guarantee**: The agent is strictly prohibited from deleting any files or directories across all paths.
   - **Jail Containment**: All file operations are sandboxed strictly within `./workspace/`; directory traversal outside this boundary is rejected.
 - **MCP Research and Obsidian Tools**:
-  - `research_topic` performs Perplexity-style multi-source research: it aggregates
-    deduplicated sources, fetches relevant same-site pages, and returns cited page
-    evidence. Set `depth=0` for search-only results or provide `domains` to search
-    selected websites independently.
+  - `web_search`, `fetch_web_content`, and `expand_web_link` bridge to the external
+    [`duckduckgo-mcp-server`](https://github.com/nickclyde/duckduckgo-mcp-server)
+    over stdio. The model can search current sources and fetch pages for multi-step
+    deep research.
   - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`,
     `obsidian_edit_note`, and `obsidian_append_note` support filesystem-first note-taking,
     including anchored edits and `[[wikilinks]]`, without deletion.
@@ -73,7 +73,7 @@ project/group-11/
 │       ├── core/               # ReAct loop, context manager, and state machine
 │       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
 │       ├── tools/              # Tool registry, filesystem/PDF tools, and MCP capabilities
-│       │   └── mcp/            # Internet research + Obsidian MCP server and adapters
+│       │   └── mcp/            # External web-search bridge + Obsidian MCP server
 │       ├── study/              # Obsidian templates, VaultLinter, and SocraticGriller
 │       ├── memory/             # Persistent long-term memory (Week 2)
 │       ├── observability/      # Prometheus telemetry & lifecycle hooks (Week 3)
@@ -154,6 +154,22 @@ $env:OBSIDIAN_VAULT_PATH = "C:\path\to\your\vault"
 python -m study_agent.tools.mcp.server
 ```
 
+Web search is provided by the external DuckDuckGo MCP server and is started on
+demand by StudyMate with `uvx`. Install `uv` first (`pip install uv`) or set
+`tools.mcp.search_command` and `tools.mcp.search_args` in `config/config.yaml`
+to another launcher. The default uses the optional browser backend to improve
+DuckDuckGo compatibility:
+
+```yaml
+tools:
+  mcp:
+    search_command: "uvx"
+    search_args:
+      - "--with"
+      - "duckduckgo-mcp-server[browser]"
+      - "duckduckgo-mcp-server"
+```
+
 #### Interactive Commands in REPL:
 - `/help` — Display command guide
 - `/ingest [path]` — Ingest source files (defaults to `workspace/data/`) into Obsidian concept notes + lecture summary
@@ -165,6 +181,7 @@ python -m study_agent.tools.mcp.server
 - `/new [name]` — Start a new thread (default on first message)
 - `/archive-this` — Archive the current thread (tombstone, no delete)
 - `/archive-all` — Archive ALL threads (asks for confirmation)
+- `/compact` — Summarize history into a checkpoint now (while staying on the same thread)
 - `/clear` — Reset in-memory history (thread history stays saved)
 - `/config` — View active runtime settings
 - `/exit, /quit` — Quit StudyMate
@@ -177,6 +194,21 @@ meaning-similar hits via `sqlite-vector` cosine search, reordered by the
 InnKube reranker (`memory_recall`). One API key covers chat, embeddings,
 and rerank (granted per model server-side). Top recent facts auto-inject
 at session start. All memory writes are append-only — nothing is ever deleted.
+
+#### Procedural Memory:
+Reusable routines live as markdown bundles in `workspace/artifacts/procedures/`
+(committed, reviewable). Each has triggers, scope, ordered steps, rationale,
+and a `draft/approved/archived` status. Matching approved routines inject
+automatically before the agent acts; drafts are surfaced for confirmation,
+never followed silently. Agent-distilled routines start as drafts for human
+approval; editing a file supersedes it (git is the version log).
+
+#### Context Compaction:
+Long sessions compact automatically at ~80% of the active model's window
+(resolved per model via `compaction.context_windows`, gateway discovery,
+or a conservative default — see `/config`), or on demand with `/compact`.
+Old tool outputs blank first (free); older turns then fold into one summary
+in the same thread. Nothing is deleted: the summary persists to the thread.
 
 ---
 
