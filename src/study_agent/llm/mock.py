@@ -15,7 +15,12 @@ class MockLLMClient(BaseLLMClient):
         self.tool_history: List[Optional[List[Dict[str, Any]]]] = []
         self._current_index = 0
 
-    def add_response(self, content: Optional[str] = None, tool_calls: Optional[List[ToolCall]] = None) -> None:
+    def add_response(
+        self,
+        content: Optional[str] = None,
+        tool_calls: Optional[List[ToolCall]] = None,
+        reasoning_tokens: int = 0,
+    ) -> None:
         """Enqueues a response for upcoming chat calls."""
         self.responses.append(
             LLMResponse(
@@ -23,7 +28,8 @@ class MockLLMClient(BaseLLMClient):
                 tool_calls=tool_calls or [],
                 prompt_tokens=10,
                 completion_tokens=10,
-                total_tokens=20
+                total_tokens=20,
+                reasoning_tokens=reasoning_tokens,
             )
         )
 

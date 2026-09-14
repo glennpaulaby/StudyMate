@@ -97,7 +97,8 @@ def init_metrics(enabled: bool, host: str = "127.0.0.1", port: int = 8000) -> bo
             )
             _metrics["llm_tokens"] = Counter(
                 f"{PREFIX}_llm_tokens_total",
-                "LLM token consumption by model and type.",
+                "LLM token consumption by model and type (reasoning is a "
+                "breakout subset of completion when the provider reports it).",
                 ["model", "type"],
             )
             _metrics["tool_calls"] = Counter(
@@ -187,6 +188,7 @@ def observe_llm(
     latency_s: float = 0.0,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> None:
     """Records one LLM chat call (count + latency + token consumption)."""
     requests = _get("llm_requests")
@@ -200,6 +202,8 @@ def observe_llm(
         tokens.labels(model=model, type="prompt").inc(prompt_tokens)  # type: ignore[union-attr]
     if completion_tokens:
         tokens.labels(model=model, type="completion").inc(completion_tokens)  # type: ignore[union-attr]
+    if reasoning_tokens:
+        tokens.labels(model=model, type="reasoning").inc(reasoning_tokens)  # type: ignore[union-attr]
 
 
 def observe_tool(tool: str, source: str = "builtin", status: str = "ok", duration_s: float = 0.0) -> None:

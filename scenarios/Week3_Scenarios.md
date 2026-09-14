@@ -71,7 +71,7 @@ Goal: prove one run yields one inspectable trace in both stores.
    - Local session: `tail -1 observability/traces.jsonl | python -m json.tool`
    - Container session: `docker compose run --rm --entrypoint cat studymate /app/observability/traces.jsonl`
    - **Pass:** one object with `run_id`, `model`, `iterations`,
-     `tokens{prompt,completion,total}`, `tools[{name,source,duration_ms,
+     `tokens{prompt,completion,reasoning,total}`, `tools[{name,source,duration_ms,
      status}]`, `status:"success"`. The agent's tools can never reach this
      file (outside the `workspace/artifacts` write jail; container traces
      live in their own volume, never the host file).

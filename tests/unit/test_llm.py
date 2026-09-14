@@ -1,4 +1,10 @@
-﻿from study_agent.core.types import ChatMessage, Role, ToolCall
+﻿from types import SimpleNamespace
+
+import pytest
+
+from study_agent.config.settings import LLMConfig
+from study_agent.core.types import ChatMessage, Role, ToolCall
+from study_agent.llm.client import OpenAICompatibleLLMClient
 from study_agent.llm.mock import MockLLMClient
 
 
@@ -31,3 +37,45 @@ def test_mock_llm_scripted_responses():
     assert len(resp2.tool_calls) == 1
     assert resp2.tool_calls[0].name == "read_file"
     assert resp2.tool_calls[0].arguments == {"path": "lecture1.txt"}
+
+
+def _fake_completion(details):
+    """Builds a minimal openai-shaped completion with the given details."""
+    message = SimpleNamespace(content="hi", tool_calls=None)
+    choice = SimpleNamespace(message=message, finish_reason="stop")
+    usage = SimpleNamespace(
+        prompt_tokens=5, completion_tokens=12, total_tokens=17,
+        completion_tokens_details=details,
+    )
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
+def _client_with_usage(monkeypatch, details):
+    client = OpenAICompatibleLLMClient(LLMConfig(api_key="test"))
+    monkeypatch.setattr(
+        client.client.chat.completions, "create", lambda **kw: _fake_completion(details)
+    )
+    return client
+
+
+def test_reasoning_tokens_parsed_object_shape(monkeypatch):
+    """Verify reasoning breakout parses from the object envelope."""
+    client = _client_with_usage(monkeypatch, SimpleNamespace(reasoning_tokens=9))
+    resp = client.chat([ChatMessage(role=Role.USER, content="hi")])
+    assert resp.reasoning_tokens == 9
+    assert resp.completion_tokens == 12 and resp.total_tokens == 17
+
+
+def test_reasoning_tokens_parsed_dict_shape(monkeypatch):
+    """Verify reasoning breakout parses from the dict envelope."""
+    client = _client_with_usage(monkeypatch, {"reasoning_tokens": 4})
+    resp = client.chat([ChatMessage(role=Role.USER, content="hi")])
+    assert resp.reasoning_tokens == 4
+
+
+@pytest.mark.parametrize("details", [None, {}, {"other": 1}, SimpleNamespace(), "junk"])
+def test_reasoning_tokens_absent_means_zero(monkeypatch, details):
+    """Verify missing/garbage breakouts degrade to 0, never raise."""
+    client = _client_with_usage(monkeypatch, details)
+    resp = client.chat([ChatMessage(role=Role.USER, content="hi")])
+    assert resp.reasoning_tokens == 0

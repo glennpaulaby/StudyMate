@@ -9,6 +9,26 @@ from study_agent.llm.base import BaseLLMClient
 logger = logging.getLogger(__name__)
 
 
+def _reasoning_tokens(usage: Any) -> int:
+    """Extracts reasoning tokens from a usage envelope (object or dict shape).
+
+    Returns 0 when the provider omits the breakout (most non-reasoning calls).
+    """
+    details = getattr(usage, "completion_tokens_details", None)
+    if details is None and isinstance(usage, dict):
+        details = usage.get("completion_tokens_details")
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        value = details.get("reasoning_tokens", 0)
+    else:
+        value = getattr(details, "reasoning_tokens", 0)
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 class OpenAICompatibleLLMClient(BaseLLMClient):
     """
     LLM Client for OpenAI-compatible endpoints (such as the InnKube cluster).
@@ -69,19 +89,22 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
                         )
                     )
             
-            # Token usage
+            # Token usage (reasoning is a breakout of completion per the
+            # OpenAI usage envelope; 0 when the provider doesn't report it).
             usage = response.usage
             prompt_tokens = usage.prompt_tokens if usage else 0
             completion_tokens = usage.completion_tokens if usage else 0
             total_tokens = usage.total_tokens if usage else 0
-            
+            reasoning_tokens = _reasoning_tokens(usage) if usage else 0
+
             return LLMResponse(
                 content=message.content,
                 tool_calls=parsed_tool_calls,
                 finish_reason=choice.finish_reason,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                total_tokens=total_tokens
+                total_tokens=total_tokens,
+                reasoning_tokens=reasoning_tokens,
             )
             
         except AuthenticationError as e:

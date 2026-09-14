@@ -160,21 +160,36 @@ def test_trace_event_schema_and_append(tmp_path):
         model="unit-model",
         status="success",
         run_id="abc123",
-        thread="unit-thread",
+        thread_id="tid9",
+        thread_name="unit-thread",
         iterations=3,
         prompt_tokens=20,
         completion_tokens=10,
         tools=[{"name": "read_file", "source": "builtin", "duration_ms": 4.5, "status": "ok"}],
         compactions=1,
     )
-    assert event["schema"] == 1
+    assert event["schema"] == 2
     assert event["tokens"]["total"] == 30
+    assert event["thread"] == {"id": "tid9", "name": "unit-thread"}
+    assert event["final_response"] == ""
+    assert event["messages"] == [] and event["turns"] == []
 
     trace_file = tmp_path / "traces.jsonl"
     assert tracing.append_trace(trace_file, event) is not None
     lines = trace_file.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["run_id"] == "abc123"
+
+
+def test_trace_arg_truncation_with_marker():
+    """Verify oversized tool arguments truncate with a marker; shorts pass through."""
+    big = {"blob": "y" * 5000, "small": "ok"}
+    truncated = tracing.truncate_args(big, 100)
+    assert truncated["small"] == "ok"
+    assert truncated["blob"].endswith("…[truncated 4900 chars]")
+    assert tracing.truncate_args({"a": 1}, 10) == {"a": 1}
+    assert tracing.truncate_args("x" * 50, 10).endswith("…[truncated 40 chars]")
+    assert tracing.truncate_args(None, 10) is None
 
 
 def test_trace_append_failure_returns_none(tmp_path):
@@ -256,7 +271,7 @@ def test_langfuse_export_success_mocked(monkeypatch):
 
     event = tracing.build_run_event(model="m", status="success", run_id="r1")
     assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is True
-    assert calls["observation"]["name"] == "studymate-run:success"
+    assert calls["observation"]["name"] == "studymate-run:success (0.0s)"
     assert calls["ended"] is True
     assert calls["flushed"] is True
 
@@ -318,3 +333,61 @@ def test_engine_run_emits_metrics_and_trace(tmp_path, enabled_metrics):
     event = json.loads(lines[0])
     assert event["status"] == "success"
     assert event["tools"][0]["name"] == "echo_tool"
+
+
+def test_engine_trace_carries_thread_messages_and_turns(tmp_path, enabled_metrics):
+    """Verify v2 event holds thread, verbatim messages, turns, final answer."""
+
+    class _EchoTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "echo_tool"
+
+        @property
+        def description(self) -> str:
+            return "Echoes back."
+
+        @property
+        def parameters(self) -> Dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        def execute(self, **kwargs: Any) -> str:
+            return "echoed"
+
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    llm = MockLLMClient()
+    llm.add_response(
+        content="",
+        tool_calls=[ToolCall(id="c1", name="echo_tool", arguments={"big": "z" * 9000})],
+        reasoning_tokens=6,
+    )
+    llm.add_response(content="finished", reasoning_tokens=4)
+    trace_file = tmp_path / "traces.jsonl"
+    obs = ObservabilityConfig(metrics_enabled=True, trace_file=str(trace_file))
+    engine = AgentEngine(llm_client=llm, tool_registry=registry, observability=obs)
+
+    result = engine.run(
+        "do the thing",
+        ContextManager(custom_system_prompt="SYS"),
+        thread_id="tid1",
+        thread_name="pizza-chat",
+    )
+
+    assert result.is_success is True
+    assert result.reasoning_tokens == 10
+    event = json.loads(trace_file.read_text(encoding="utf-8").strip())
+    assert event["schema"] == 2
+    assert event["tokens"]["reasoning"] == 10
+    assert event["thread"] == {"id": "tid1", "name": "pizza-chat"}
+    assert [m["role"] for m in event["messages"]] == ["system", "user", "assistant", "tool", "assistant"]
+    assert event["messages"][0]["content"] == "SYS"
+    assert len(event["turns"]) == 2
+    assert event["turns"][0]["llm"]["tool_calls"][0]["name"] == "echo_tool"
+    assert event["turns"][0]["llm"]["tool_calls"][0]["arguments"]["big"].endswith("…[truncated 5000 chars]")
+    assert event["turns"][0]["tools"] == [{"name": "echo_tool", "observation": "echoed"}]
+    assert event["turns"][1]["llm"]["content"] == "finished"
+    assert event["turns"][0]["llm"]["reasoning_tokens"] == 6
+    assert event["turns"][1]["llm"]["reasoning_tokens"] == 4
+    assert event["final_response"] == "finished"
+    assert event["duration_s"] >= 0.0

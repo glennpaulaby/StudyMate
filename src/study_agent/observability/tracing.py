@@ -21,7 +21,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-TRACE_SCHEMA_VERSION = 1
+TRACE_SCHEMA_VERSION = 2
+
+DEFAULT_TRACE_MAX_CHARS = 4000
 
 _OTEL_LOGGERS_QUIETED = False
 
@@ -54,38 +56,72 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def truncate_text(text: Any, max_chars: int = DEFAULT_TRACE_MAX_CHARS) -> Any:
+    """Truncates long strings with a marker; passes non-strings through."""
+    if not isinstance(text, str) or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"…[truncated {len(text) - max_chars} chars]"
+
+
+def truncate_args(arguments: Any, max_chars: int = DEFAULT_TRACE_MAX_CHARS) -> Any:
+    """Truncates tool-call arguments (dict values or raw strings) with markers."""
+    if isinstance(arguments, dict):
+        return {
+            k: (truncate_text(v, max_chars) if isinstance(v, str) else v)
+            for k, v in arguments.items()
+        }
+    return truncate_text(arguments, max_chars)
+
+
 def build_run_event(
     *,
     model: str,
     status: str,
     run_id: Optional[str] = None,
     parent_run_id: str = "",
-    thread: str = "",
+    thread_id: str = "",
+    thread_name: str = "",
     iterations: int = 0,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    final_response: str = "",
+    messages: Optional[List[Dict[str, Any]]] = None,
+    turns: Optional[List[Dict[str, Any]]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     permission_decisions: Optional[List[Dict[str, Any]]] = None,
     compactions: int = 0,
+    duration_s: float = 0.0,
     error: str = "",
 ) -> Dict[str, Any]:
-    """Builds one schema-v1 trace event (pure, no I/O — trivially testable)."""
+    """Builds one schema-v2 trace event (pure, no I/O — trivially testable).
+
+    `messages` is the verbatim context snapshot (system prompt included);
+    `turns` holds per-iteration LLM responses plus tool observations.
+    Tool arguments are truncated with markers; everything else is verbatim.
+    Readers must tolerate missing keys (v1 lines predate thread/messages).
+    """
     return {
         "schema": TRACE_SCHEMA_VERSION,
         "run_id": run_id or new_run_id(),
         "parent_run_id": parent_run_id,
         "timestamp": _utc_now_iso(),
         "model": model,
-        "thread": thread,
+        "thread": {"id": thread_id, "name": thread_name},
         "iterations": iterations,
         "tokens": {
             "prompt": prompt_tokens,
             "completion": completion_tokens,
+            "reasoning": reasoning_tokens,
             "total": prompt_tokens + completion_tokens,
         },
+        "final_response": final_response,
+        "messages": messages or [],
+        "turns": turns or [],
         "tools": tools or [],
         "permission_decisions": permission_decisions or [],
         "compactions": compactions,
+        "duration_s": round(duration_s, 3),
         "status": status,
         "error": error,
     }
@@ -172,26 +208,37 @@ def export_langfuse(
         )
         tokens = event.get("tokens", {}) if isinstance(event.get("tokens"), dict) else {}
         status = str(event.get("status", "unknown"))
+        thread = event.get("thread", {}) if isinstance(event.get("thread"), dict) else {}
+        messages = event.get("messages", [])
+        duration_s = float(event.get("duration_s", 0.0) or 0.0)
         span = client.start_observation(
             trace_context=TraceContext(
                 trace_id=_langfuse_trace_id(client, str(event.get("run_id", "")))
             ),
-            name=f"studymate-run:{status}",
+            # NOTE: the span's own start/end wrap only this export call, so the
+            # UI's "own span duration" is ~0 by construction. The true run
+            # duration rides in the name + output below (the SDK offers no
+            # backdated span start).
+            name=f"studymate-run:{status} ({duration_s:.1f}s)",
             as_type="agent",
             input={
-                "thread": event.get("thread", ""),
-                "iterations": event.get("iterations", 0),
-                "prompt_tokens": tokens.get("prompt", 0),
+                "thread": thread,
+                "message_count": len(messages) if isinstance(messages, list) else 0,
+                "messages": messages,
             },
             output={
-                "completion_tokens": tokens.get("completion", 0),
+                "final_response": event.get("final_response", ""),
+                "turns": event.get("turns", []),
                 "tools": event.get("tools", []),
+                "duration_s": duration_s,
                 "error": event.get("error", ""),
             },
             metadata={
                 "model": event.get("model", ""),
                 "parent_run_id": event.get("parent_run_id", ""),
                 "compactions": event.get("compactions", 0),
+                "tokens": tokens,
+                "duration_s": duration_s,
             },
             level="ERROR" if status == "error" else "DEFAULT",
             status_message=str(event.get("error", "")) or None,

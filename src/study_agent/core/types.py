@@ -68,6 +68,7 @@ class LLMResponse(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    reasoning_tokens: int = 0
     raw_response: Optional[Dict[str, Any]] = None
 
 
@@ -79,5 +80,6 @@ class AgentRunResult(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    reasoning_tokens: int = 0
     is_success: bool = True
     error_message: Optional[str] = None

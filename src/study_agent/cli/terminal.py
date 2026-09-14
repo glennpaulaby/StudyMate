@@ -1053,13 +1053,13 @@ def run_cli(
 
             # Stamp thread provenance onto memory_store (harness-injected per
             # turn so stored facts carry thread id + name + date).
+            turn_thread_name = ""
             if memory_store is not None and active_thread_id is not None:
                 store_tool = registry.get("memory_store")
                 if store_tool is not None and hasattr(store_tool, "set_thread_context"):
                     thread = memory_store.get_thread(active_thread_id, include_archived=True)
-                    store_tool.set_thread_context(
-                        active_thread_id, thread.name if thread else ""
-                    )
+                    turn_thread_name = thread.name if thread else ""
+                    store_tool.set_thread_context(active_thread_id, turn_thread_name)
 
             # Run ReAct Loop with animated status
             turn_start = time.perf_counter()
@@ -1068,7 +1068,9 @@ def run_cli(
                     result = engine.run(
                         user_message=user_input,
                         context=context,
-                        on_tool_start=on_tool_start
+                        on_tool_start=on_tool_start,
+                        thread_id=active_thread_id or "",
+                        thread_name=turn_thread_name,
                     )
                 except Exception as e:
                     duration_s = time.perf_counter() - turn_start
@@ -1078,6 +1080,8 @@ def run_cli(
                             model=app_config.llm.model,
                             status="error",
                             run_id=new_run_id(),
+                            thread_id=active_thread_id or "",
+                            thread_name=turn_thread_name,
                             error=str(e),
                         )
                         append_trace(obs_cfg.trace_file, event)

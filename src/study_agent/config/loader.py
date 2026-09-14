@@ -68,6 +68,11 @@ def load_config(
             pass
     if os.getenv("STUDYMATE_METRICS_HOST", "") != "":
         _obs.metrics_host = os.getenv("STUDYMATE_METRICS_HOST", "").strip()
+    if os.getenv("STUDYMATE_TRACE_MAX_CHARS", "") != "":
+        try:
+            _obs.trace_max_chars = int(os.getenv("STUDYMATE_TRACE_MAX_CHARS", ""))
+        except ValueError:
+            pass
     if os.getenv("LANGFUSE_ENABLED", "") != "":
         _obs.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
     if os.getenv("LANGFUSE_HOST", "") != "":

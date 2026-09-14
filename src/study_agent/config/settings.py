@@ -91,6 +91,9 @@ class ObservabilityConfig(BaseModel):
         default="./observability/traces.jsonl",
         description="Harness-owned JSONL trace log (outside agent write jail)",
     )
+    trace_max_chars: int = Field(
+        default=4000, ge=0, description="Per-argument cap in traces (0 disables truncation)"
+    )
     langfuse_enabled: bool = Field(default=False, description="Langfuse trace exporter switch")
     langfuse_host: str = Field(default="http://localhost:3000", description="Self-hosted Langfuse base URL")
     langfuse_public_key: str = Field(default="", description="Langfuse project public key (secret, env-only)")

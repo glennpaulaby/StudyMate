@@ -24,6 +24,7 @@ from study_agent.observability.tracing import (
     build_run_event,
     export_langfuse_async,
     new_run_id,
+    truncate_args,
 )
 from study_agent.tools.base import ToolRegistry, tool_source
 
@@ -86,21 +87,39 @@ class AgentEngine:
         total_tokens: int,
         compactions: int,
         tool_records: List[Dict[str, Any]],
+        turns: List[Dict[str, Any]],
+        context: ContextManager,
         run_start: float,
+        thread_id: str = "",
+        thread_name: str = "",
+        reasoning_tokens: int = 0,
         error_message: str = "",
     ) -> AgentRunResult:
         """Emits run metrics + one trace event, then builds the result."""
-        observe_run(status, time.perf_counter() - run_start, iterations)
+        duration_s = time.perf_counter() - run_start
+        observe_run(status, duration_s, iterations)
         if self._obs_active():
+            try:
+                messages = [m.to_dict() for m in context.get_messages()]
+            except Exception as e:
+                logger.warning(f"Trace message snapshot failed: {e}")
+                messages = []
             event = build_run_event(
                 model=model,
                 status=status,
                 run_id=run_id,
+                thread_id=thread_id,
+                thread_name=thread_name,
                 iterations=iterations,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                reasoning_tokens=reasoning_tokens,
+                final_response=final_response,
+                messages=messages,
+                turns=turns,
                 tools=tool_records,
                 compactions=compactions,
+                duration_s=duration_s,
                 error=error_message,
             )
             obs = self.observability
@@ -119,6 +138,7 @@ class AgentEngine:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            reasoning_tokens=reasoning_tokens,
             is_success=(status == "success"),
             error_message=error_message,
         )
@@ -144,11 +164,14 @@ class AgentEngine:
         user_message: str,
         context: ContextManager,
         on_tool_start: Optional[Callable[[ToolCall], None]] = None,
-        on_tool_end: Optional[Callable[[ToolCall, str], None]] = None
+        on_tool_end: Optional[Callable[[ToolCall, str], None]] = None,
+        thread_id: str = "",
+        thread_name: str = "",
     ) -> AgentRunResult:
         """
         Runs the ReAct loop until the agent produces a terminal textual answer
-        or the max_iterations budget is exceeded.
+        or the max_iterations budget is exceeded. Thread provenance (for
+        traces) is harness-supplied; the model never sees these arguments.
         """
         context.add_user_message(user_message)
 
@@ -157,13 +180,16 @@ class AgentEngine:
         total_prompt_tokens = 0
         total_completion_tokens = 0
         total_tokens = 0
+        total_reasoning_tokens = 0
         overflow_retried = False
         self.compaction_state.compacted_this_run = False
         run_id = new_run_id()
         run_start = time.perf_counter()
         model = self.llm_client_model_name()
         tool_records: List[Dict[str, Any]] = []
+        turns: List[Dict[str, Any]] = []
         compactions = 0
+        max_chars = self.observability.trace_max_chars
 
         schemas = self.tool_registry.list_schemas() if self.tool_registry else None
 
@@ -226,12 +252,33 @@ class AgentEngine:
                 time.perf_counter() - llm_start,
                 response.prompt_tokens,
                 response.completion_tokens,
+                response.reasoning_tokens,
             )
             observe_component_latency("llm", time.perf_counter() - llm_start)
 
             total_prompt_tokens += response.prompt_tokens
             total_completion_tokens += response.completion_tokens
             total_tokens += response.total_tokens
+            total_reasoning_tokens += response.reasoning_tokens
+
+            # Trace record for this iteration (LLM "parts"); tool observations
+            # append below as they execute.
+            turn: Dict[str, Any] = {
+                "n": iterations,
+                "llm": {
+                    "content": response.content or "",
+                    "tool_calls": [
+                        {"name": tc.name, "arguments": truncate_args(tc.arguments, max_chars)}
+                        for tc in response.tool_calls
+                    ],
+                    "finish_reason": response.finish_reason or "",
+                    "prompt_tokens": response.prompt_tokens,
+                    "completion_tokens": response.completion_tokens,
+                    "reasoning_tokens": response.reasoning_tokens,
+                },
+                "tools": [],
+            }
+            turns.append(turn)
 
             # Append assistant's reasoning turn (content and/or tool call decisions)
             context.add_assistant_message(
@@ -267,7 +314,12 @@ class AgentEngine:
                         total_tokens=total_tokens,
                         compactions=compactions,
                         tool_records=tool_records,
+                        turns=turns,
+                        context=context,
                         run_start=run_start,
+                        thread_id=thread_id,
+                        thread_name=thread_name,
+                        reasoning_tokens=total_reasoning_tokens,
                         error_message=message,
                     )
 
@@ -290,7 +342,12 @@ class AgentEngine:
                     total_tokens=total_tokens,
                     compactions=compactions,
                     tool_records=tool_records,
+                    turns=turns,
+                    context=context,
                     run_start=run_start,
+                    thread_id=thread_id,
+                    thread_name=thread_name,
+                    reasoning_tokens=total_reasoning_tokens,
                 )
 
             # 3. Act: Execute each tool call requested by LLM
@@ -312,8 +369,10 @@ class AgentEngine:
                         "source": tool_source(registered) if registered is not None else "builtin",
                         "duration_ms": round(tool_duration_ms, 2),
                         "status": "error" if observation.startswith("Error") else "ok",
+                        "arguments": truncate_args(tool_call.arguments, max_chars),
                     }
                 )
+                turn["tools"].append({"name": tool_call.name, "observation": observation})
 
                 if on_tool_end:
                     on_tool_end(tool_call, observation)
@@ -339,6 +398,11 @@ class AgentEngine:
             total_tokens=total_tokens,
             compactions=compactions,
             tool_records=tool_records,
+            turns=turns,
+            context=context,
             run_start=run_start,
+            thread_id=thread_id,
+            thread_name=thread_name,
+            reasoning_tokens=total_reasoning_tokens,
             error_message=f"Reached maximum iterations ({self.config.max_iterations})",
         )
