@@ -15,6 +15,11 @@ from study_agent.tools.mcp import (
     ObsidianVaultService,
     register_mcp_tools,
 )
+from study_agent.tools.delegation import (
+    DelegateTaskTool,
+    ResearchTopicTool,
+    register_delegation_tools,
+)
 
 __all__ = [
     "BaseTool",
@@ -31,4 +36,7 @@ __all__ = [
     "ExternalMCPService",
     "ObsidianVaultService",
     "register_mcp_tools",
+    "DelegateTaskTool",
+    "ResearchTopicTool",
+    "register_delegation_tools",
 ]

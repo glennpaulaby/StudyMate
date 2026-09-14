@@ -81,3 +81,6 @@ class AgentRunResult(BaseModel):
     total_tokens: int = 0
     is_success: bool = True
     error_message: Optional[str] = None
+    run_id: Optional[str] = None
+    parent_run_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)

@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import sys
 from pathlib import Path
 from typing import Optional
@@ -46,6 +46,7 @@ from study_agent.security.policy import PermissionEvent, policy_from_config
 from study_agent.tools.filesystem import register_filesystem_tools
 from study_agent.tools.mcp import register_mcp_tools
 from study_agent.tools.mcp.external import ExternalMCPService
+from study_agent.tools.delegation import register_delegation_tools
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -778,6 +779,9 @@ def run_cli(
                     args=app_config.tools.mcp.search_args,
                 ),
             )
+
+    if "delegate_task" not in registry.tools:
+        register_delegation_tools(registry, client)
 
     engine = AgentEngine(
         llm_client=client,

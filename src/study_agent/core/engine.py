@@ -1,5 +1,6 @@
 import logging
-from typing import Callable, Optional
+import uuid
+from typing import Any, Callable, Dict, List, Optional
 from study_agent.config.settings import AgentConfig, CompactionConfig
 from study_agent.core.compaction import (
     CompactionState,
@@ -27,19 +28,44 @@ class AgentEngine:
     def __init__(
         self,
         llm_client: BaseLLMClient,
-        tool_registry: ToolRegistry,
+        tool_registry: Optional[ToolRegistry] = None,
         config: Optional[AgentConfig] = None,
         compaction: Optional[CompactionConfig] = None,
         llm_base_url: str = "",
+        system_prompt: Optional[str] = None,
+        tools: Optional[ToolRegistry] = None,
+        max_iterations: Optional[int] = None,
+        parent_run_id: Optional[str] = None,
+        on_telemetry_event: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
         self.llm_client = llm_client
-        self.tool_registry = tool_registry
+        self.tool_registry = tools if tools is not None else (tool_registry if tool_registry is not None else ToolRegistry())
         self.config = config or AgentConfig()
+        if max_iterations is not None:
+            self.config = self.config.model_copy(update={"max_iterations": max_iterations})
+        self.system_prompt = system_prompt
+        self.parent_run_id = parent_run_id
         self.compaction = compaction or CompactionConfig()
         self.compaction_state = CompactionState()
         self.llm_base_url = llm_base_url
         self._context_window: Optional[int] = None
         self._window_source: str = "unresolved"
+        self.on_telemetry_event: List[Callable[[Dict[str, Any]], None]] = []
+        if on_telemetry_event is not None:
+            self.on_telemetry_event.append(on_telemetry_event)
+
+    def _emit_telemetry(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Emits a telemetry event dictionary to all registered listeners."""
+        payload = {
+            "event": event_type,
+            "parent_run_id": self.parent_run_id,
+            **data,
+        }
+        for listener in self.on_telemetry_event:
+            try:
+                listener(payload)
+            except Exception as e:
+                logger.warning(f"Telemetry listener failed: {e}")
 
     def _window(self) -> int:
         """Resolves (and caches) the active model's context window."""
@@ -60,7 +86,7 @@ class AgentEngine:
     def run(
         self,
         user_message: str,
-        context: ContextManager,
+        context: Optional[ContextManager] = None,
         on_tool_start: Optional[Callable[[ToolCall], None]] = None,
         on_tool_end: Optional[Callable[[ToolCall, str], None]] = None
     ) -> AgentRunResult:
@@ -68,7 +94,16 @@ class AgentEngine:
         Runs the ReAct loop until the agent produces a terminal textual answer
         or the max_iterations budget is exceeded.
         """
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        if context is None:
+            context = ContextManager(custom_system_prompt=self.system_prompt)
+
         context.add_user_message(user_message)
+
+        self._emit_telemetry("run_start", {
+            "run_id": run_id,
+            "user_message": user_message,
+        })
 
         iterations = 0
         tool_calls_count = 0
@@ -151,7 +186,7 @@ class AgentEngine:
                         "The model returned an empty response after "
                         f"{iterations} attempt(s). No completion summary was produced."
                     )
-                    return AgentRunResult(
+                    res = AgentRunResult(
                         final_response=message,
                         iterations=iterations,
                         tool_calls_count=tool_calls_count,
@@ -160,7 +195,23 @@ class AgentEngine:
                         total_tokens=total_tokens,
                         is_success=False,
                         error_message=message,
+                        run_id=run_id,
+                        parent_run_id=self.parent_run_id,
+                        metadata={
+                            "run_id": run_id,
+                            "parent_run_id": self.parent_run_id,
+                            "iterations": iterations,
+                            "tool_calls_count": tool_calls_count,
+                        },
                     )
+                    self._emit_telemetry("run_end", {
+                        "run_id": run_id,
+                        "is_success": False,
+                        "iterations": iterations,
+                        "total_tokens": total_tokens,
+                        "error_message": message,
+                    })
+                    return res
 
                 if response.finish_reason == "length" and iterations < self.config.max_iterations:
                     context.add_user_message(
@@ -169,21 +220,43 @@ class AgentEngine:
                     )
                     continue
 
-                return AgentRunResult(
+                res = AgentRunResult(
                     final_response=response.content or "",
                     iterations=iterations,
                     tool_calls_count=tool_calls_count,
                     prompt_tokens=total_prompt_tokens,
                     completion_tokens=total_completion_tokens,
                     total_tokens=total_tokens,
-                    is_success=True
+                    is_success=True,
+                    run_id=run_id,
+                    parent_run_id=self.parent_run_id,
+                    metadata={
+                        "run_id": run_id,
+                        "parent_run_id": self.parent_run_id,
+                        "iterations": iterations,
+                        "tool_calls_count": tool_calls_count,
+                    },
                 )
+                self._emit_telemetry("run_end", {
+                    "run_id": run_id,
+                    "is_success": True,
+                    "iterations": iterations,
+                    "total_tokens": total_tokens,
+                })
+                return res
 
             # 3. Act: Execute each tool call requested by LLM
             for tool_call in response.tool_calls:
                 tool_calls_count += 1
                 if on_tool_start:
                     on_tool_start(tool_call)
+
+                self._emit_telemetry("tool_start", {
+                    "run_id": run_id,
+                    "tool_call_id": tool_call.id,
+                    "tool_name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                })
 
                 observation = self.tool_registry.execute(
                     name=tool_call.name,
@@ -192,6 +265,13 @@ class AgentEngine:
 
                 if on_tool_end:
                     on_tool_end(tool_call, observation)
+
+                self._emit_telemetry("tool_end", {
+                    "run_id": run_id,
+                    "tool_call_id": tool_call.id,
+                    "tool_name": tool_call.name,
+                    "observation": observation,
+                })
 
                 # 4. Observe: Append execution result back to conversation context
                 context.add_tool_result(
@@ -202,7 +282,7 @@ class AgentEngine:
 
         # Reached max iterations without terminal answer
         logger.warning(f"ReAct loop reached max iterations ({self.config.max_iterations})")
-        return AgentRunResult(
+        res = AgentRunResult(
             final_response="I reached the maximum number of reasoning steps without finishing. Please refine your query.",
             iterations=iterations,
             tool_calls_count=tool_calls_count,
@@ -210,5 +290,21 @@ class AgentEngine:
             completion_tokens=total_completion_tokens,
             total_tokens=total_tokens,
             is_success=False,
-            error_message=f"Reached maximum iterations ({self.config.max_iterations})"
+            error_message=f"Reached maximum iterations ({self.config.max_iterations})",
+            run_id=run_id,
+            parent_run_id=self.parent_run_id,
+            metadata={
+                "run_id": run_id,
+                "parent_run_id": self.parent_run_id,
+                "iterations": iterations,
+                "tool_calls_count": tool_calls_count,
+            },
         )
+        self._emit_telemetry("run_end", {
+            "run_id": run_id,
+            "is_success": False,
+            "iterations": iterations,
+            "total_tokens": total_tokens,
+            "error_message": res.error_message,
+        })
+        return res
