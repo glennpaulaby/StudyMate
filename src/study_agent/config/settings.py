@@ -93,6 +93,8 @@ class ObservabilityConfig(BaseModel):
     )
     langfuse_enabled: bool = Field(default=False, description="Langfuse trace exporter switch")
     langfuse_host: str = Field(default="http://localhost:3000", description="Self-hosted Langfuse base URL")
+    langfuse_public_key: str = Field(default="", description="Langfuse project public key (secret, env-only)")
+    langfuse_secret_key: str = Field(default="", description="Langfuse project secret key (secret, env-only)")
 
 
 class AppConfig(BaseModel):

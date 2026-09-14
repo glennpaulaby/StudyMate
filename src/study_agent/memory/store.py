@@ -8,6 +8,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from study_agent.core.types import ChatMessage, Role, ToolCall
+from study_agent.observability.metrics import observe_memory
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,7 @@ class MemoryStore:
                 (thread_id, name, now, now),
             )
         logger.debug(f"Created thread {thread_id} ({name})")
+        observe_memory("thread_create", "ok")
         return ThreadRecord(id=thread_id, name=name, created_at=now, updated_at=now)
 
     def list_threads(
@@ -311,7 +313,9 @@ class MemoryStore:
             self._conn.execute(
                 "UPDATE messages SET archived = 1 WHERE thread_id = ?", (thread_id,)
             )
-        return cur.rowcount > 0
+        found = cur.rowcount > 0
+        observe_memory("thread_archive", "archived" if found else "missing")
+        return found
 
     def archive_all(self) -> int:
         """Tombstones every non-archived thread + message. Returns thread count."""
@@ -321,6 +325,7 @@ class MemoryStore:
                 (_utc_now_iso(),),
             )
             self._conn.execute("UPDATE messages SET archived = 1 WHERE archived = 0")
+        observe_memory("thread_archive_all", "ok")
         return cur.rowcount
 
     def get_messages(self, thread_id: str, limit: int = 50, offset: int = 0) -> List[ChatMessage]:

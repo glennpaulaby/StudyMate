@@ -1,4 +1,5 @@
 ﻿import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +37,17 @@ from study_agent.memory.rerank import InnKubeReranker, Reranker
 from study_agent.memory.store import MemoryStore
 from study_agent.memory.threads import generate_thread_name, resolve_thread
 from study_agent.memory.tools import register_memory_tools
+from study_agent.observability.metrics import (
+    init_metrics,
+    observe_compaction,
+    observe_run,
+)
+from study_agent.observability.tracing import (
+    append_trace,
+    build_run_event,
+    export_langfuse_async,
+    new_run_id,
+)
 from study_agent.study.griller import SocraticGriller
 from study_agent.study.procedures import DRAFT, format_procedures_block, match_procedures
 from study_agent.study.linter import VaultLintReport, VaultLinter
@@ -677,6 +689,10 @@ def run_cli(
     client = llm_client or OpenAICompatibleLLMClient(app_config.llm)
     context = ContextManager(system_prompt_path=app_config.agent.system_prompt_path)
 
+    obs_cfg = app_config.observability
+    if obs_cfg.metrics_enabled:
+        init_metrics(True, host=obs_cfg.metrics_host, port=obs_cfg.metrics_port)
+
     registry = tool_registry or ToolRegistry()
     project_root = Path.cwd().resolve()
     if tool_registry is None and app_config.tools.filesystem.enabled:
@@ -708,6 +724,7 @@ def run_cli(
         config=app_config.agent,
         compaction=app_config.compaction,
         llm_base_url=app_config.llm.base_url,
+        observability=app_config.observability,
     )
 
     memory_store: Optional[MemoryStore] = None
@@ -974,6 +991,7 @@ def run_cli(
                 if not compacted:
                     console.print("[yellow]Compaction did not run (breaker open or summarizer failed).[/yellow]")
                     continue
+                observe_compaction("manual")
                 if memory_store is not None and active_thread_id is not None:
                     try:
                         memory_store.add_message(active_thread_id, context.get_messages()[1])
@@ -1014,6 +1032,7 @@ def run_cli(
             pre_len = len(context.get_messages())
 
             # Run ReAct Loop with animated status
+            turn_start = time.perf_counter()
             with console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots"):
                 try:
                     result = engine.run(
@@ -1022,6 +1041,23 @@ def run_cli(
                         on_tool_start=on_tool_start
                     )
                 except Exception as e:
+                    duration_s = time.perf_counter() - turn_start
+                    observe_run("error", duration_s)
+                    if obs_cfg.metrics_enabled or obs_cfg.langfuse_enabled:
+                        event = build_run_event(
+                            model=app_config.llm.model,
+                            status="error",
+                            run_id=new_run_id(),
+                            error=str(e),
+                        )
+                        append_trace(obs_cfg.trace_file, event)
+                        if obs_cfg.langfuse_enabled:
+                            export_langfuse_async(
+                                event,
+                                host=obs_cfg.langfuse_host,
+                                public_key=obs_cfg.langfuse_public_key,
+                                secret_key=obs_cfg.langfuse_secret_key,
+                            )
                     console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
                     continue
 

@@ -4,6 +4,7 @@ from study_agent.memory.embeddings import Embedder, pack_embedding
 from study_agent.memory.rerank import Reranker
 from study_agent.memory.retrieval import hybrid_recall
 from study_agent.memory.store import MemoryStore
+from study_agent.observability.metrics import observe_memory
 from study_agent.tools.base import BaseTool, ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,9 @@ class MemoryStoreTool(BaseTool):
                 topic=topic, fact=fact, tags=tag_list, embedding=embedding, embedding_model=model
             )
         except ValueError as e:
+            observe_memory("store_fact", "error")
             return f"Error: {e}"
+        observe_memory("store_fact", "created" if created else "deduplicated")
         verb = "Stored" if created else "Already known (deduplicated)"
         vec_note = "" if embedding is not None else " (text-only, no vector)"
         return f"{verb} fact #{record.id} under topic '{record.topic}'{vec_note}."
@@ -119,7 +122,9 @@ class MemoryRecallTool(BaseTool):
             self.store, query, self.embedder, limit=limit, reranker=self.reranker
         )
         if not facts:
+            observe_memory("recall", "empty")
             return f"No persisted facts found for '{query}'."
+        observe_memory("recall", "semantic" if semantic_used else "keyword")
         lines = [f"Found {len(facts)} fact(s):"]
         for f in facts:
             tag_str = f" [tags: {', '.join(f.tags)}]" if f.tags else ""

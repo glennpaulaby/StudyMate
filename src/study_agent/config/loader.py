@@ -72,5 +72,10 @@ def load_config(
         _obs.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
     if os.getenv("LANGFUSE_HOST", "") != "":
         _obs.langfuse_host = os.getenv("LANGFUSE_HOST", "").strip()
+    # Secrets: env-only, never from YAML (mirrors the LLM API-key pattern).
+    if os.getenv("LANGFUSE_PUBLIC_KEY", "") != "":
+        _obs.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    if os.getenv("LANGFUSE_SECRET_KEY", "") != "":
+        _obs.langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
 
     return config
