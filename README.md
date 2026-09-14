@@ -193,6 +193,7 @@ tools:
 - `/compact` — Summarize history into a checkpoint now (while staying on the same thread)
 - `/clear` — Reset in-memory history (thread history stays saved)
 - `/config` — View active runtime settings
+- `/permissions` — Show the active tool permission policy and session allowances
 - `/exit, /quit` — Quit StudyMate
 
 #### Long-Term Memory:
@@ -311,5 +312,5 @@ docker run -it --rm \
   - Persistent long-term memory across sessions
 - [ ] **Week 3: Observability, Permissions, and Sub-Agents**
   - Prometheus metrics instrumentation and dashboard
-  - Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`)
+  - [x] Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`) — policy gate in `ToolRegistry`, YAML rules (first match wins, fail-closed default), interactive `y/n/always`, `/permissions`, decision events on a hook seam for Prometheus
   - Specialized sub-agents with task delegation on the same harness

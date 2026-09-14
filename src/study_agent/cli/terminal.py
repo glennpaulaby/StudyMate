@@ -1,4 +1,5 @@
-﻿import sys
+﻿import logging
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -41,11 +42,13 @@ from study_agent.study.procedures import DRAFT, format_procedures_block, match_p
 from study_agent.study.linter import VaultLintReport, VaultLinter
 from study_agent.study.templates import CONCEPT_TEMPLATE, FLASHCARD_TEMPLATE, LECTURE_TEMPLATE
 from study_agent.tools.base import ToolRegistry
+from study_agent.security.policy import PermissionEvent, policy_from_config
 from study_agent.tools.filesystem import register_filesystem_tools
 from study_agent.tools.mcp import register_mcp_tools
 from study_agent.tools.mcp.external import ExternalMCPService
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 STUDYMATE_STYLE = Style.from_dict({
     "prompt": "bold ansicyan",
@@ -83,6 +86,7 @@ class StudyMateCompleter(Completer):
         ("/compact", "Summarize history into a checkpoint now"),
         ("/clear", "Reset in-memory conversation history"),
         ("/config", "View active configuration settings"),
+        ("/permissions", "Show active tool permission policy"),
         ("/exit", "Exit StudyMate"),
         ("/quit", "Exit StudyMate"),
     ]
@@ -264,6 +268,7 @@ def print_help() -> None:
     table.add_row("/compact", "Summarize history into a checkpoint now (same thread)")
     table.add_row("/clear", "Reset in-memory history (thread history stays saved)")
     table.add_row("/config", "Display current configuration parameters")
+    table.add_row("/permissions", "Show the active tool permission policy and session allowances")
     table.add_row("/exit, /quit", "Exit StudyMate")
     console.print(table)
 
@@ -661,6 +666,70 @@ def print_config(config: AppConfig) -> None:
     console.print(table)
 
 
+def make_confirmation_handler(registry: ToolRegistry):
+    """
+    Builds the interactive yes/no/always confirmation prompt used by the
+    permission gate when a tool call requires user confirmation.
+    Fails closed (returns False) on non-interactive stdin or interrupted input.
+    """
+
+    def handler(name: str, arguments: dict, rule_desc: str) -> bool:
+        if not (sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()):
+            return False
+        args_preview = escape(str(arguments))
+        if len(args_preview) > 200:
+            args_preview = args_preview[:200] + "…"
+        console.print(Panel(
+            f"[bold]{escape(name)}[/bold] requires confirmation [dim]({escape(rule_desc)})[/dim]\n"
+            f"[dim]{args_preview}[/dim]",
+            title="🔐 Permission check",
+            border_style="yellow",
+        ))
+        try:
+            answer = console.input(
+                "[bold yellow]Allow this tool call? [green]y[/green]/"
+                "[red]n[/red]/[cyan]always[/cyan] [/bold yellow]"
+            ).strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            return False
+        if answer in ("a", "always"):
+            if registry.policy is not None:
+                registry.policy.allow_for_session(name)
+                console.print(f"[cyan]✓ '{escape(name)}' allowed for this session.[/cyan]")
+            return True
+        return answer in ("y", "yes")
+
+    return handler
+
+
+def print_permissions(registry: ToolRegistry) -> None:
+    """Displays the active permission policy and any session-level allowances."""
+    if registry.policy is None:
+        console.print("[yellow]Permission management is disabled.[/yellow]")
+        return
+    table = Table(title="Permission Policy (first match wins)", show_header=True, header_style="bold yellow")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Tools", style="cyan")
+    table.add_column("Decision", style="white")
+    table.add_column("Tier", style="magenta")
+    for i, rule in enumerate(registry.policy.rules, start=1):
+        table.add_row(
+            str(i), ", ".join(rule.tools), rule.decision.value, rule.tier,
+        )
+    console.print(table)
+    console.print(
+        f"[dim]Default (no rule matched):[/dim] [bold]{registry.policy.default_decision.value}[/bold]"
+    )
+    if registry.policy.session_allowances:
+        console.print(
+            "[dim]Session allowances:[/dim] "
+            + ", ".join(registry.policy.session_allowances)
+        )
+    if registry.confirmation_handler is None:
+        console.print("[yellow]Non-interactive mode: confirmations are denied (fail-closed).[/yellow]")
+
+
 def run_cli(
     config: Optional[AppConfig] = None,
     llm_client: Optional[BaseLLMClient] = None,
@@ -673,7 +742,19 @@ def run_cli(
     client = llm_client or OpenAICompatibleLLMClient(app_config.llm)
     context = ContextManager(system_prompt_path=app_config.agent.system_prompt_path)
 
-    registry = tool_registry or ToolRegistry()
+    registry = tool_registry or ToolRegistry(
+        policy=policy_from_config(app_config.permissions),
+    )
+    if tool_registry is None and registry.policy is not None:
+        registry.confirmation_handler = make_confirmation_handler(registry)
+
+        def _log_permission_event(event: PermissionEvent) -> None:
+            logger.info(
+                f"permission: tool={event.tool} decision={event.decision.value} "
+                f"executed={event.executed} rule={event.source}"
+            )
+
+        registry.on_permission_decision.append(_log_permission_event)
     project_root = Path.cwd().resolve()
     if tool_registry is None and app_config.tools.filesystem.enabled:
         workspace_root = (project_root / app_config.agent.workspace_dir).resolve()
@@ -976,6 +1057,9 @@ def run_cli(
                     except Exception as e:
                         console.print(f"[yellow]Warning: summary not persisted: {e}[/yellow]")
                 console.print(f"[green]✓ Compacted: ~{before} → ~{after} tokens (est.). Same thread, history saved.[/green]")
+                continue
+            elif user_input.lower() == "/permissions":
+                print_permissions(registry)
                 continue
             elif user_input.lower() == "/config":
                 print_config(app_config)
