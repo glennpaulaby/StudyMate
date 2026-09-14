@@ -1051,6 +1051,16 @@ def run_cli(
             ensure_thread(user_input)
             pre_len = len(context.get_messages())
 
+            # Stamp thread provenance onto memory_store (harness-injected per
+            # turn so stored facts carry thread id + name + date).
+            if memory_store is not None and active_thread_id is not None:
+                store_tool = registry.get("memory_store")
+                if store_tool is not None and hasattr(store_tool, "set_thread_context"):
+                    thread = memory_store.get_thread(active_thread_id, include_archived=True)
+                    store_tool.set_thread_context(
+                        active_thread_id, thread.name if thread else ""
+                    )
+
             # Run ReAct Loop with animated status
             turn_start = time.perf_counter()
             with console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots"):

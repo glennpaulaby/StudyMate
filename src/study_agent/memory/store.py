@@ -34,6 +34,7 @@ class FactRecord(BaseModel):
     fact: str = Field(description="The durable fact text")
     tags: List[str] = Field(default_factory=list, description="Search tags")
     source_thread: Optional[str] = Field(default=None, description="Thread id where the fact emerged")
+    source_thread_name: Optional[str] = Field(default=None, description="Thread name where the fact emerged")
     created_at: str = Field(description="ISO creation timestamp")
     archived: bool = Field(default=False, description="Tombstone flag; archived facts are hidden, never deleted")
 
@@ -46,6 +47,12 @@ class MemoryStore:
     existing `allowed_write` jail. Append-only; no delete API
     (preserves `allow_delete=False` invariant).
     """
+
+    # Non-embedding fact columns shared by every SELECT (single source of
+    # truth so new provenance columns can't be missed by one query).
+    _FACT_COLS = (
+        "id, topic, fact, tags, source_thread, source_thread_name, created_at, archived"
+    )
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -138,6 +145,7 @@ class MemoryStore:
                     fact TEXT NOT NULL,
                     tags TEXT NOT NULL DEFAULT '',
                     source_thread TEXT,
+                    source_thread_name TEXT,
                     created_at TEXT NOT NULL,
                     archived INTEGER NOT NULL DEFAULT 0,
                     embedding BLOB,
@@ -159,6 +167,9 @@ class MemoryStore:
                 self._conn.execute("ALTER TABLE facts ADD COLUMN embedding BLOB")
             if "embedding_model" not in self._table_columns("facts"):
                 self._conn.execute("ALTER TABLE facts ADD COLUMN embedding_model TEXT")
+            # Migrate pre-provenance DBs (thread name added Week 3).
+            if "source_thread_name" not in self._table_columns("facts"):
+                self._conn.execute("ALTER TABLE facts ADD COLUMN source_thread_name TEXT")
             # Migrate pre-archive DBs (CREATE TABLE IF NOT EXISTS won't alter them).
             if "archived" not in self._table_columns("threads"):
                 self._conn.execute("ALTER TABLE threads ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
@@ -383,6 +394,7 @@ class MemoryStore:
         fact: str,
         tags: Optional[List[str]] = None,
         source_thread: Optional[str] = None,
+        source_thread_name: Optional[str] = None,
         embedding: Optional[bytes] = None,
         embedding_model: Optional[str] = None,
     ) -> tuple[FactRecord, bool]:
@@ -414,29 +426,45 @@ class MemoryStore:
                 )
             try:
                 cur = self._conn.execute(
-                    "INSERT INTO facts (topic, fact, tags, source_thread, created_at, archived, "
-                    "embedding, embedding_model) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-                    (topic, fact, tags_str, source_thread, _utc_now_iso(), embedding, embedding_model),
+                    "INSERT INTO facts (topic, fact, tags, source_thread, source_thread_name, "
+                    "created_at, archived, embedding, embedding_model) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    (
+                        topic,
+                        fact,
+                        tags_str,
+                        source_thread,
+                        source_thread_name,
+                        _utc_now_iso(),
+                        embedding,
+                        embedding_model,
+                    ),
                 )
                 row = self._conn.execute(
-                    "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                    "FROM facts WHERE id = ?",
+                    f"SELECT {self._FACT_COLS} FROM facts WHERE id = ?",
                     (cur.lastrowid,),
                 ).fetchone()
                 return self._row_to_fact(row), True
             except sqlite3.IntegrityError:
                 row = self._conn.execute(
-                    "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                    "FROM facts WHERE topic = ? AND fact = ?",
+                    f"SELECT {self._FACT_COLS} FROM facts WHERE topic = ? AND fact = ?",
                     (topic, fact),
                 ).fetchone()
                 if row is None:  # pragma: no cover - defensive; UNIQUE guarantees a row
                     raise
                 if row["archived"]:
                     self._conn.execute("UPDATE facts SET archived = 0 WHERE id = ?", (row["id"],))
+                # Fill in missing provenance on revive; never overwrite it.
+                if (row["source_thread"] is None and source_thread) or (
+                    row["source_thread_name"] is None and source_thread_name
+                ):
+                    self._conn.execute(
+                        "UPDATE facts SET source_thread = COALESCE(source_thread, ?), "
+                        "source_thread_name = COALESCE(source_thread_name, ?) WHERE id = ?",
+                        (source_thread, source_thread_name, row["id"]),
+                    )
                 full = self._conn.execute(
-                    "SELECT id, topic, fact, tags, source_thread, created_at, archived, "
-                    "embedding, embedding_model FROM facts WHERE id = ?",
+                    "SELECT id, topic, fact, tags, source_thread, source_thread_name, created_at, "
+                    "archived, embedding, embedding_model FROM facts WHERE id = ?",
                     (row["id"],),
                 ).fetchone()
                 if embedding is not None and (
@@ -447,8 +475,7 @@ class MemoryStore:
                         (embedding, embedding_model, row["id"]),
                     )
                 row = self._conn.execute(
-                    "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                    "FROM facts WHERE id = ?",
+                    f"SELECT {self._FACT_COLS} FROM facts WHERE id = ?",
                     (row["id"],),
                 ).fetchone()
                 return self._row_to_fact(row), False
@@ -462,16 +489,15 @@ class MemoryStore:
         q = (query or "").strip().lower()
         if not q:
             rows = self._conn.execute(
-                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                "FROM facts WHERE archived = 0 ORDER BY id DESC LIMIT ? OFFSET ?",
+                f"SELECT {self._FACT_COLS} FROM facts WHERE archived = 0 "
+                "ORDER BY id DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         else:
             like = f"%{q}%"
             rows = self._conn.execute(
-                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                "FROM facts WHERE archived = 0 AND (lower(topic) LIKE ? OR lower(fact) LIKE ? "
-                "OR lower(tags) LIKE ?) ORDER BY id DESC LIMIT ? OFFSET ?",
+                f"SELECT {self._FACT_COLS} FROM facts WHERE archived = 0 AND (lower(topic) LIKE ? "
+                "OR lower(fact) LIKE ? OR lower(tags) LIKE ?) ORDER BY id DESC LIMIT ? OFFSET ?",
                 (like, like, like, limit, offset),
             ).fetchall()
         return [self._row_to_fact(r) for r in rows]
@@ -494,14 +520,12 @@ class MemoryStore:
         """Returns a single fact by id, or None if missing/archived."""
         if include_archived:
             row = self._conn.execute(
-                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                "FROM facts WHERE id = ?",
+                f"SELECT {self._FACT_COLS} FROM facts WHERE id = ?",
                 (fact_id,),
             ).fetchone()
         else:
             row = self._conn.execute(
-                "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-                "FROM facts WHERE id = ? AND archived = 0",
+                f"SELECT {self._FACT_COLS} FROM facts WHERE id = ? AND archived = 0",
                 (fact_id,),
             ).fetchone()
         return self._row_to_fact(row) if row else None
@@ -529,7 +553,8 @@ class MemoryStore:
         k = max(1, limit + offset)
         try:
             rows = self._conn.execute(
-                "SELECT f.id, f.topic, f.fact, f.tags, f.source_thread, f.created_at, "
+                "SELECT f.id, f.topic, f.fact, f.tags, f.source_thread, f.source_thread_name, "
+                "f.created_at, "
                 "f.archived, v.distance FROM vector_full_scan('facts', 'embedding', ?, ?) AS v "
                 "JOIN facts AS f ON f.rowid = v.rowid "
                 "WHERE f.archived = 0 AND f.embedding_model = ?",
@@ -544,9 +569,8 @@ class MemoryStore:
     def get_facts_missing_embeddings(self, model: str, limit: int = 100) -> List[FactRecord]:
         """Returns non-archived facts lacking a vector for `model` (backfill queue)."""
         rows = self._conn.execute(
-            "SELECT id, topic, fact, tags, source_thread, created_at, archived "
-            "FROM facts WHERE archived = 0 AND (embedding IS NULL OR embedding_model IS NULL "
-            "OR embedding_model != ?) ORDER BY id ASC LIMIT ?",
+            f"SELECT {self._FACT_COLS} FROM facts WHERE archived = 0 AND (embedding IS NULL "
+            "OR embedding_model IS NULL OR embedding_model != ?) ORDER BY id ASC LIMIT ?",
             (model, limit),
         ).fetchall()
         return [self._row_to_fact(r) for r in rows]
