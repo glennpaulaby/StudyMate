@@ -313,4 +313,5 @@ docker run -it --rm \
 - [ ] **Week 3: Observability, Permissions, and Sub-Agents**
   - Prometheus metrics instrumentation and dashboard
   - [x] Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`) — policy gate in `ToolRegistry`, YAML rules (first match wins, fail-closed default), interactive `y/n/always`, `/permissions`, decision events on a hook seam for Prometheus
-  - Specialized sub-agents with task delegation on the same harness
+  - [x] Specialized sub-agents with task delegation on the same harness (`SubagentRegistry`, `DelegateTaskTool`, pre-configured `examiner` for Socratic grilling with read-only tools and `researcher` for literature analysis, context isolation, and `parent_run_id` telemetry tracking)
+
