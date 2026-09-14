@@ -63,6 +63,41 @@ compaction:
     qwen-agentworld-35b-a3b: 262144
     gemma4-31b-it: 131072
 
+permissions:
+  # Week 3: multi-tier permission gate on every built-in and MCP tool call.
+  # Rules are evaluated in order; first match wins. Unmatched calls fall
+  # back to default_decision (fail-closed: a tool with no rule needs a
+  # human, which covers runtime-discovered MCP tools automatically).
+  enabled: true
+  default_decision: "require-user-confirmation"
+  rules:
+    # Tier 1 — observe: read-only inspection, always allowed.
+    - tools: ["read_file", "read_pdf", "list_files", "search_text"]
+      decision: "allow"
+      tier: "observe"
+    - tools: ["obsidian_list_notes", "obsidian_read_note", "obsidian_search_notes",
+              "obsidian_get_outgoing_links", "obsidian_get_backlinks"]
+      decision: "allow"
+      tier: "observe"
+    - tools: ["memory_recall"]
+      decision: "allow"
+      tier: "observe"
+    # Tier 2 — sandbox-edit: writes confined to the artifacts jail.
+    - tools: ["create_folder", "write_file", "edit_file", "rename_file"]
+      decision: "allow"
+      tier: "sandbox-edit"
+    - tools: ["obsidian_write_note", "obsidian_append_note", "obsidian_edit_note",
+              "obsidian_insert_into_section"]
+      decision: "allow"
+      tier: "sandbox-edit"
+    - tools: ["memory_store"]
+      decision: "allow"
+      tier: "sandbox-edit"
+    # Tier 3 — consequential: outward-facing / non-deterministic sources.
+    - tools: ["web_search", "fetch_web_content", "expand_web_link"]
+      decision: "require-user-confirmation"
+      tier: "consequential"
+
 observability:
   log_level: "INFO"
   metrics_enabled: false

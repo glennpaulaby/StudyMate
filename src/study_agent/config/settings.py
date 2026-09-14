@@ -81,6 +81,28 @@ class CompactionConfig(BaseModel):
     )
 
 
+class PermissionRuleConfig(BaseModel):
+    """One permission rule as declared in config.yaml."""
+    tools: List[str] = Field(description="Tool names or fnmatch patterns this rule matches")
+    decision: str = Field(description="allow | deny | require-user-confirmation")
+    tier: str = Field(default="", description="Free-form label (observe, sandbox-edit, consequential)")
+    arguments: Dict[str, str] = Field(
+        default_factory=dict, description="Optional argument field -> value pattern conditions"
+    )
+
+
+class PermissionsConfig(BaseModel):
+    """Multi-tier permission management for built-in and MCP tools (Week 3)."""
+    enabled: bool = Field(default=True, description="Whether the permission gate is active")
+    default_decision: str = Field(
+        default="require-user-confirmation",
+        description="Fallback for tool calls matched by no rule (fail-closed)",
+    )
+    rules: List[PermissionRuleConfig] = Field(
+        default_factory=list, description="Ordered rules; first match wins"
+    )
+
+
 class ObservabilityConfig(BaseModel):
     """Logging and Prometheus telemetry settings."""
     log_level: str = Field(default="INFO", description="Logging verbosity")
@@ -95,4 +117,5 @@ class AppConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
