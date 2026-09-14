@@ -656,6 +656,10 @@ def print_config(config: AppConfig) -> None:
     table.add_row("Memory DB", config.memory.db_path)
     table.add_row("Context Window", f"{config.compaction.context_windows.get(config.llm.model, config.compaction.default_context_window)} (model: {config.llm.model})")
     table.add_row("Compact Threshold", f"{config.compaction.threshold} (~{int(config.compaction.context_windows.get(config.llm.model, config.compaction.default_context_window) * config.compaction.threshold)} tokens)")
+    table.add_row("Metrics Enabled", str(config.observability.metrics_enabled))
+    table.add_row("Metrics Endpoint", f"{config.observability.metrics_host}:{config.observability.metrics_port}")
+    table.add_row("Trace File", config.observability.trace_file)
+    table.add_row("Langfuse", f"{'enabled' if config.observability.langfuse_enabled else 'disabled'} ({config.observability.langfuse_host})")
     table.add_row("API Key Set?", "Yes" if config.llm.api_key else "No (Set INNKUBE_API_KEY)")
 
     console.print(table)
@@ -1049,6 +1053,13 @@ def run_cli(
         memory_store.close()
 
 
+def _launch_new_terminal_enabled() -> bool:
+    """Whether `main()` may pop a dedicated window (opt-in, default False)."""
+    import os
+
+    return os.getenv("LAUNCH_NEW_TERMINAL", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def launch_in_new_window() -> bool:
     """Spawns StudyMate in a dedicated, clean terminal window on supported platforms."""
     import os
@@ -1103,12 +1114,13 @@ def main() -> None:
         run_cli()
         return
 
-    # Attempt to pop up a dedicated window
-    if launch_in_new_window():
+    # Opt-in dedicated window (default: same terminal). Enable with LAUNCH_NEW_TERMINAL=true.
+    if _launch_new_terminal_enabled() and launch_in_new_window():
         console.print("[bold green]🎓 Launched StudyMate in a new window![/bold green]")
         console.print("[dim]You can close this terminal or keep working here.[/dim]")
-    else:
-        run_cli()
+        return
+
+    run_cli()
 
 
 if __name__ == "__main__":

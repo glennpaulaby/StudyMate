@@ -57,4 +57,20 @@ def load_config(
     if not config.llm.api_key:
         config.llm.api_key = os.getenv("INNKUBE_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
 
+    # 6. Observability overrides (env > YAML > defaults). Never commit secrets.
+    _obs = config.observability
+    if os.getenv("STUDYMATE_METRICS_ENABLED", "") != "":
+        _obs.metrics_enabled = os.getenv("STUDYMATE_METRICS_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.getenv("STUDYMATE_METRICS_PORT", "") != "":
+        try:
+            _obs.metrics_port = int(os.getenv("STUDYMATE_METRICS_PORT", ""))
+        except ValueError:
+            pass
+    if os.getenv("STUDYMATE_METRICS_HOST", "") != "":
+        _obs.metrics_host = os.getenv("STUDYMATE_METRICS_HOST", "").strip()
+    if os.getenv("LANGFUSE_ENABLED", "") != "":
+        _obs.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.getenv("LANGFUSE_HOST", "") != "":
+        _obs.langfuse_host = os.getenv("LANGFUSE_HOST", "").strip()
+
     return config

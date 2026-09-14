@@ -85,7 +85,14 @@ class ObservabilityConfig(BaseModel):
     """Logging and Prometheus telemetry settings."""
     log_level: str = Field(default="INFO", description="Logging verbosity")
     metrics_enabled: bool = Field(default=False, description="Prometheus metrics exporter switch")
+    metrics_host: str = Field(default="127.0.0.1", description="Prometheus exporter bind host")
     metrics_port: int = Field(default=8000, ge=1024, le=65535, description="Prometheus scrape port")
+    trace_file: str = Field(
+        default="./observability/traces.jsonl",
+        description="Harness-owned JSONL trace log (outside agent write jail)",
+    )
+    langfuse_enabled: bool = Field(default=False, description="Langfuse trace exporter switch")
+    langfuse_host: str = Field(default="http://localhost:3000", description="Self-hosted Langfuse base URL")
 
 
 class AppConfig(BaseModel):

@@ -66,4 +66,8 @@ compaction:
 observability:
   log_level: "INFO"
   metrics_enabled: false
+  metrics_host: "127.0.0.1"
   metrics_port: 8000
+  trace_file: "./observability/traces.jsonl"
+  langfuse_enabled: false
+  langfuse_host: "http://localhost:3000"
