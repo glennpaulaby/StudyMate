@@ -195,27 +195,69 @@ def test_langfuse_export_skipped_without_sdk(monkeypatch):
     assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is False
 
 
+def test_langfuse_export_unreachable_host_fails_fast():
+    """Verify a down server returns False quickly instead of timing out flush."""
+    import time
+
+    event = tracing.build_run_event(model="m", status="ok")
+    start = time.perf_counter()
+    # Nothing listens on port 1 -> connection refused, no retry storm.
+    assert tracing.export_langfuse(event, host="http://127.0.0.1:1", public_key="p", secret_key="s") is False
+    assert time.perf_counter() - start < 15.0
+
+
+def test_otel_loggers_quieted_on_export(monkeypatch):
+    """Verify the OTel SDK spam is silenced so it can't corrupt the REPL prompt."""
+    import logging
+
+    fake_module = types.ModuleType("langfuse")
+    fake_module.Langfuse = None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langfuse", fake_module)
+
+    event = tracing.build_run_event(model="m", status="ok")
+    assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is False
+    for name in (
+        "opentelemetry",
+        "opentelemetry.exporter.otlp",
+        "opentelemetry.sdk.trace.export",
+    ):
+        assert logging.getLogger(name).level == logging.CRITICAL
+
+
 def test_langfuse_export_success_mocked(monkeypatch):
-    """Verify the happy path posts one trace and flushes (SDK mocked)."""
+    """Verify the happy path posts one observation and flushes (SDK mocked)."""
     calls: Dict[str, Any] = {}
+
+    class _FakeSpan:
+        def end(self, **kwargs: Any) -> None:
+            calls["ended"] = True
 
     class _FakeClient:
         def __init__(self, **kwargs: Any) -> None:
             calls["init"] = kwargs
 
-        def trace(self, **kwargs: Any) -> None:
-            calls["trace"] = kwargs
+        def create_trace_id(self) -> str:
+            return "mock-trace-id"
+
+        def start_observation(self, **kwargs: Any) -> _FakeSpan:
+            calls["observation"] = kwargs
+            return _FakeSpan()
 
         def flush(self) -> None:
             calls["flushed"] = True
 
     fake_module = types.ModuleType("langfuse")
     fake_module.Langfuse = _FakeClient  # type: ignore[attr-defined]
+    fake_types = types.ModuleType("langfuse.types")
+    fake_types.TraceContext = lambda **kwargs: kwargs  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "langfuse", fake_module)
+    monkeypatch.setitem(sys.modules, "langfuse.types", fake_types)
+    monkeypatch.setattr(tracing, "_host_reachable", lambda host, timeout_s=3.0: True)
 
     event = tracing.build_run_event(model="m", status="success", run_id="r1")
     assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is True
-    assert calls["trace"]["id"] == "r1"
+    assert calls["observation"]["name"] == "studymate-run:success"
+    assert calls["ended"] is True
     assert calls["flushed"] is True
 
 

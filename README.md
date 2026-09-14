@@ -54,6 +54,9 @@ flowchart TD
         Memory <--> Rerank[InnKube Reranker<br/>hybrid reordering]
         Registry <--> Proc[Procedures<br/>markdown bundles<br/>draft/approved/archived]
         Registry <--> MCP[MCP Tools<br/>Web Research (DuckDuckGo)<br/>+ Obsidian Vault]
+        Core -.->|lifecycle hooks<br/>runs/llm/tools/memory| Obs[Observability<br/>Prometheus metrics<br/>+ JSONL traces]
+        Obs -->|export| LF[(Langfuse<br/>per-run traces)]
+        Obs -->|scrape :8000| Prom[(Prometheus<br/>rules + dashboard)]
     end
 
     subgraph Sandbox["Workspace Sandbox"]
@@ -85,9 +88,11 @@ project/group-11/
 │       │   └── mcp/            # External web-search bridge + Obsidian MCP server
 │       ├── study/              # Obsidian templates, VaultLinter, SocraticGriller, Procedures
 │       ├── memory/             # SQLite threads/facts + sqlite-vector + reranker + compaction
-│       ├── observability/      # Prometheus telemetry & lifecycle hooks (Week 3)
+│       ├── observability/      # Metrics + tracing modules (metrics.py, tracing.py)
 │       ├── security/           # Multi-tier permission management (Week 3)
 │       └── subagents/          # Specialized sub-agent coordination (Week 3)
+├── observability/              # Prometheus scrape config + rules (committed)
+│                               # traces.jsonl = harness-owned run log (gitignored)
 ├── tests/
 │   ├── unit/                   # Unit tests (config, context, LLM, tools, engine, linter)
 │   └── e2e/                    # End-to-end benchmark & study workflow tests
@@ -138,6 +143,18 @@ Edit `.env`:
 ```env
 INNKUBE_API_KEY=your_innkube_token_here
 ```
+
+Which keys you set yourself vs. generate: **you set** values that come from
+a provider or a UI — `INNKUBE_API_KEY` (lab token) and, for observability,
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (Langfuse → Settings → API Keys)
+plus the `*_ENABLED`/host toggles. **You generate** the machine-to-machine
+passwords (`POSTGRES_PASSWORD`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`,
+`MINIO_ROOT_PASSWORD` + S3 keys, `NEXTAUTH_SECRET`, `SALT`,
+`ENCRYPTION_KEY`): random per machine, never typed by hand — e.g.
+`python -c "import secrets; print(secrets.token_urlsafe(24))"`. Rule of
+thumb: if you had to ask someone (or some UI) for the value, you set it;
+if it just needs to exist and match on both ends, generate it. `.env` is
+gitignored — never commit it.
 
 ### 4. Add Your Study Materials
 `workspace/data/` and `workspace/artifacts/` aren't tracked in git (they start empty), so on a fresh
@@ -218,6 +235,19 @@ Long sessions compact automatically at ~80% of the active model's window
 or a conservative default — see `/config`), or on demand with `/compact`.
 Old tool outputs blank first (free); older turns then fold into one summary
 in the same thread. Nothing is deleted: the summary persists to the thread.
+
+#### Observability (Week 3 Task 1):
+Every run emits `studymate_*` Prometheus series (runs, LLM calls + tokens,
+tool calls by `builtin|mcp|memory` tier, memory ops, compactions, plus
+`permission_decisions_total` and `subagent_runs_total` contract hooks owned
+by teammates) via decoupled lifecycle hooks — never inline prints. One JSON
+line per run appends to harness-owned `./observability/traces.jsonl`
+(outside the agent's write jail) and exports best-effort to self-hosted
+Langfuse. Enable with `STUDYMATE_METRICS_ENABLED=true` (metrics on
+`127.0.0.1:8000`, `/config` shows state); scrape config and dashboard
+recording rules live in `observability/`; the full stack
+(`studymate` + `prometheus` + Langfuse) boots via `docker compose up -d` —
+see `scenarios/Week3_Scenarios.md`.
 
 ---
 
@@ -310,6 +340,7 @@ docker run -it --rm \
   - Dynamic MCP client integration and persistent long-term memory remain next steps
   - Persistent long-term memory across sessions
 - [ ] **Week 3: Observability, Permissions, and Sub-Agents**
-  - Prometheus metrics instrumentation and dashboard
-  - Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`)
-  - Specialized sub-agents with task delegation on the same harness
+  - [x] Prometheus metrics instrumentation and dashboard (Task 1: `studymate_*`
+    series, `observability/` scrape config + rules, Langfuse trace export)
+  - [ ] Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`)
+  - [ ] Specialized sub-agents with task delegation on the same harness

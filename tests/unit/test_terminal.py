@@ -398,3 +398,12 @@ def test_main_spawns_new_window_when_enabled(monkeypatch):
     terminal.main()
     spawned.assert_called_once_with()
     called.assert_not_called()
+
+
+def test_read_student_input_uses_styled_session(monkeypatch):
+    """Verify input goes through the session prompt (patch_stdout-wrapped)."""
+    prompted = MagicMock(return_value="  hello  ")
+    fake_session = MagicMock()
+    fake_session.prompt = prompted
+    assert terminal.read_student_input(fake_session) == "hello"
+    prompted.assert_called_once()

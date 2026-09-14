@@ -28,4 +28,6 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 
 # Entrypoint launches the terminal agent
+# Port 8000 serves the Prometheus /metrics endpoint when enabled.
+EXPOSE 8000
 ENTRYPOINT ["studymate"]

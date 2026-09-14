@@ -231,14 +231,34 @@ def create_input_session(toolbar_fn, completer=None) -> Optional[object]:
 
 
 def read_student_input(session) -> str:
-    """Reads one REPL line via the session (styled) or Rich fallback."""
-    if (
+    """Reads one REPL line via the session (styled) or Rich fallback.
+
+    Prompts run inside ``patch_stdout`` (when a real console exists) so
+    background output (e.g. the async Langfuse trace exporter) renders above
+    the input line instead of corrupting the ``student >`` prompt. Headless
+    environments (tests, pipes) transparently fall back to unguarded prompts.
+    """
+    from contextlib import ExitStack
+
+    def _prompt_styled() -> str:
+        return session.prompt([("class:prompt", "student > ")], complete_while_typing=True).strip()
+
+    def _prompt_fallback() -> str:
+        return console.input("[bold cyan]student > [/bold cyan]").strip()
+
+    use_styled = (
         session is not None
         and getattr(console.input, "_mock_wraps", None) is None
         and getattr(console.input, "side_effect", None) is None
-    ):
+    )
+    with ExitStack() as stack:
         try:
-            return session.prompt([("class:prompt", "student > ")], complete_while_typing=True).strip()
+            from prompt_toolkit.patch_stdout import patch_stdout
+            stack.enter_context(patch_stdout())
+        except Exception:
+            pass  # no console to guard (tests/pipes) — prompt unguarded
+        try:
+            return _prompt_styled() if use_styled else _prompt_fallback()
         except (KeyboardInterrupt, EOFError):
             raise
         except Exception:
