@@ -17,6 +17,8 @@ services:
       context: .
       dockerfile: Dockerfile
     image: studymate:latest
+    # Built locally from ./Dockerfile — never pulled from a registry.
+    pull_policy: build
     container_name: studymate
     stdin_open: true
     tty: true
@@ -44,7 +46,8 @@ services:
       - studymate-observability:/app/observability
 
   prometheus:
-    image: docker.io/prom/prometheus:latest
+    # Major-pin floats patches safely; bare `latest` can break across pulls.
+    image: docker.io/prom/prometheus:v3
     container_name: studymate-prometheus
     restart: always
     command:

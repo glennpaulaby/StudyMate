@@ -6,12 +6,19 @@ end-to-end on a TA machine with only secrets in `.env` (see `.env.example`).
 ```bash
 git checkout experimental/observability-layer
 cp .env.example .env   # then set INNKUBE_API_KEY + generated Langfuse secrets
-docker compose pull
+docker compose pull    # skips studymate (pull_policy: build)
+docker compose build studymate
 docker compose up -d postgres redis clickhouse minio
 # wait for healthy, then:
 docker compose up -d langfuse-web langfuse-worker prometheus
 # Langfuse at http://localhost:3000 ("Ready" in web logs), Prometheus at :9092
 ```
+
+Sessions run two ways — pick one per demo and say which:
+- **Local:** `studymate` from the venv (uses your repo `workspace/` + `traces.jsonl`).
+- **Container:** `docker compose run --rm --service-ports studymate` (fully
+  sandboxed: repo tree read-only, own `studymate-artifacts` + `studymate-observability`
+  volumes, zero host threads — verified: 0 threads/facts, host tree byte-identical).
 
 ---
 
@@ -60,11 +67,14 @@ Goal: prove the server loop is closed and the 7 required panels precompute.
 
 Goal: prove one run yields one inspectable trace in both stores.
 
-1. After any REPL turn: `tail -1 observability/traces.jsonl | python -m json.tool`
+1. After any REPL turn:
+   - Local session: `tail -1 observability/traces.jsonl | python -m json.tool`
+   - Container session: `docker compose run --rm --entrypoint cat studymate /app/observability/traces.jsonl`
    - **Pass:** one object with `run_id`, `model`, `iterations`,
      `tokens{prompt,completion,total}`, `tools[{name,source,duration_ms,
      status}]`, `status:"success"`. The agent's tools can never reach this
-     file (outside the `workspace/artifacts` write jail).
+     file (outside the `workspace/artifacts` write jail; container traces
+     live in their own volume, never the host file).
 2. Open `http://localhost:3000 → Traces`
    - **Pass:** `studymate-run:success` with the same `run_id`, model, token
      counts, and tool calls. Export is best-effort: a down Langfuse never
@@ -77,15 +87,16 @@ Goal: prove observability is strictly opt-in and offline-safe.
 1. `STUDYMATE_METRICS_ENABLED=false studymate`, ask a question, exit.
    - **Pass:** no `:8000` listener, no `traces.jsonl` writes, suite green.
 2. `pytest tests/unit/test_observability.py tests/e2e/test_observability.py`
-   - **Pass:** 13 passed — no-op mode, frozen series names, schema-v1
-     roundtrip, mocked Langfuse paths, teammate contract hooks
-     (`permission_decisions_total`, `subagent_runs_total`).
+   - **Pass:** 15 passed — no-op mode, frozen series names, schema-v1
+     roundtrip, mocked Langfuse paths, fast-fail on unreachable host,
+     teammate contract hooks (`permission_decisions_total`,
+     `subagent_runs_total`).
 
 ---
 
 ## Cross-cutting checks
 
-- Full suite green: `pytest` (148 passed on this branch).
+- Full suite green: `pytest` (151 passed on this branch).
 - No secrets committed (`.env` gitignored; `.env.example` holds placeholders).
 - No deletions anywhere: `allow_delete=False`; traces are append-only.
 - Metric names frozen in `src/study_agent/observability/metrics.py` — the
@@ -94,4 +105,7 @@ Goal: prove observability is strictly opt-in and offline-safe.
 - Known environment notes: compose uses the `docker.io/langfuse` mirror
   (`docker.langfuse.com` is DNS-blocked on some networks); MinIO/S3 is
   mandatory for v4 trace ingestion (verified live — removal breaks the
-  worker with `ENOTFOUND minio`).
+  worker with `ENOTFOUND minio`); `studymate` uses `pull_policy: build`
+  (local image, never pulled); image pins are major-float
+  (`postgres:17`, `redis:7`, `prometheus:v3`, `langfuse:4`), ClickHouse
+  pinned `25.12` for server-compatibility checks.
