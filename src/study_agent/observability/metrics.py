@@ -53,8 +53,13 @@ def is_enabled() -> bool:
     return _enabled
 
 
+def _live() -> bool:
+    """True only when collection was switched on (disabled mode is a no-op)."""
+    return _enabled and _PROM_AVAILABLE
+
+
 def _get(name: str) -> Optional[object]:
-    return _metrics.get(name)
+    return _metrics.get(name) if _live() else None
 
 
 def init_metrics(enabled: bool, host: str = "127.0.0.1", port: int = 8000) -> bool:
