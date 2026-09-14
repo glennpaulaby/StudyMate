@@ -34,8 +34,14 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
     volumes:
-      - ./workspace:/app/workspace
-      - ./observability:/app/observability
+      # Fully sandboxed instance: the repo tree is visible read-only, every
+      # write (generated notes, memory.db, traces) lands in container-owned
+      # named volumes. Nothing a container session does touches host dev data.
+      - ./workspace:/app/workspace:ro
+      - studymate-artifacts:/app/workspace/artifacts
+      # Team-shared routines stay visible (read-only) inside the sandbox.
+      - ./workspace/artifacts/procedures:/app/workspace/artifacts/procedures:ro
+      - studymate-observability:/app/observability
 
   prometheus:
     image: docker.io/prom/prometheus:latest
@@ -228,4 +234,9 @@ volumes:
   langfuse_redis_data:
     driver: local
   prometheus_data:
+    driver: local
+  # Container-owned sandbox state (see studymate volumes above).
+  studymate-artifacts:
+    driver: local
+  studymate-observability:
     driver: local

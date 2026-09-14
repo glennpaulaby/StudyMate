@@ -13,3 +13,11 @@ htmlcov/
 .ruff_cache
 .env
 daily_reports/
+# Runtime/workspace data — memory.db, study materials, traces. Never baked
+# into the image (the container gets its own volumes); also keeps the build
+# context small and future COPY instructions honest.
+workspace/
+observability/traces.jsonl
+*.db
+*.sqlite*
+*.sqlite-journal
