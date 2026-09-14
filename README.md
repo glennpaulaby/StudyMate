@@ -38,22 +38,31 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
 
 ```mermaid
 flowchart TD
-    User([Student / Terminal]) <-->|CLI: studymate| CLI[Terminal UI / REPL]
+    User([Student / Terminal]) <-->|CLI: studymate| CLI[Terminal UI / REPL<br/>+ Completer + Context Toolbar]
     CLI <--> Core[ReAct Engine / State Machine]
     CLI <--> Linter[Vault Linter & Health Check]
     CLI <--> Griller[Socratic Grilling Sparring]
-    
+
     subgraph Harness["StudyMate Agent Harness"]
-        Core <--> Context[Context Manager]
-        Core <--> LLM[LLM Client / InnKube Endpoint]
+        Core <--> Context[Context Manager<br/>+ Auto/Manual Compaction]
+        Core <--> LLM[LLM Client / InnKube<br/>chat + octen-embedding-8b + qwen3-reranker-4b]
         Core <--> Registry[Tool Registry]
         Registry <--> Security[Security & Path Jail Policy]
         Security <--> FS[Filesystem & PDF Tools]
+        Registry <--> Memory[Memory Store<br/>Threads + Facts]
+        Memory <--> Vector[sqlite-vector<br/>cosine search]
+        Memory <--> Rerank[InnKube Reranker<br/>hybrid reordering]
+        Registry <--> Proc[Procedures<br/>markdown bundles<br/>draft/approved/archived]
+        Registry <--> MCP[MCP Tools<br/>Web Research (DuckDuckGo)<br/>+ Obsidian Vault]
     end
-    
+
     subgraph Sandbox["Workspace Sandbox"]
         FS -.->|Read Only| Data[("workspace/data/<br/>(Course Documents & PDFs)")]
-        FS <-->|Read / Write / Edit| Artifacts[("workspace/artifacts/<br/>(Obsidian Study Notes)")]
+        FS <-->|Read / Write / Edit| Artifacts[("workspace/artifacts/<br/>(Obsidian Notes +<br/>memory.db + procedures/)")]
+        Memory <--> Artifacts
+        Proc <--> Artifacts
+        MCP -.->|search/fetch| Internet[(Internet)]
+        MCP <--> Artifacts
     end
 ```
 
@@ -74,8 +83,8 @@ project/group-11/
 │       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
 │       ├── tools/              # Tool registry, filesystem/PDF tools, and MCP capabilities
 │       │   └── mcp/            # External web-search bridge + Obsidian MCP server
-│       ├── study/              # Obsidian templates, VaultLinter, and SocraticGriller
-│       ├── memory/             # Persistent long-term memory (Week 2)
+│       ├── study/              # Obsidian templates, VaultLinter, SocraticGriller, Procedures
+│       ├── memory/             # SQLite threads/facts + sqlite-vector + reranker + compaction
 │       ├── observability/      # Prometheus telemetry & lifecycle hooks (Week 3)
 │       ├── security/           # Multi-tier permission management (Week 3)
 │       └── subagents/          # Specialized sub-agent coordination (Week 3)

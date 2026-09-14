@@ -1,33 +1,32 @@
 ---
 name: "skill-creator"
-triggers: ["create a skill", "new skill", "improve skill", "skill from scratch", "turn this into a skill", "make a procedure", "optimize triggers"]
-scope: "Applies when the user wants to create a reusable procedure bundle from scratch, improve an existing one, or tune its trigger phrases. Does not apply to one-off tasks (just do them), fact storage (use memory_store), or plain Q&A."
+triggers: ["skill-creator", "create skill", "new routine", "procedure draft", "improve skill", "eval skill"]
+scope: "Applies when the student asks to turn a repeated multi-step success into a reusable routine/skill, or to create, improve, or eval such a routine in the StudyMate harness. Does not apply to single-file edits, /ingest runs, or /grill sessions."
 version: 1
 status: "draft"
 supersedes: ""
 ---
 
 ## Steps
-1. Capture intent first: what should the routine enable, when should it trigger (exact trigger phrases), what output shape is expected, and whether evals are wanted. Verifiable outputs (file transforms, fixed workflow steps) get test cases; taste-based outputs (writing style) usually skip them. Extract answers from conversation history before asking.
-2. Interview for edge cases: input/output formats, example files, success criteria, dependencies. Check existing bundles in `workspace/artifacts/procedures/` and `study/templates.py` first so the user isn't re-explaining known context.
-3. Draft the bundle with `format_procedure()`: frontmatter (name, triggers, scope, version, status=draft) plus Steps, Rationale, Pitfalls, Example. Keep it lean; attach the *why* to every non-obvious step instead of writing MUSTs.
-4. Write 2-3 realistic test prompts (things a real student would actually type, with detail and casual phrasing — never abstract stubs like "test ingest").
-5. Run with-procedure vs baseline, serially (no subagents on this harness): inject via `match_procedures()` + `engine.run()` with a scripted `MockLLMClient`, then the same prompt with no injection. Save runs under `workspace/artifacts/` scratch, not the repo.
-6. Grade both ways: quantitative assertions as `pytest` (exact, deterministic — assert on payloads and artifacts, e.g. procedure text present in `mock.call_history`); qualitative outputs shown to the user in the REPL for judgment calls. Compare with vs without, like-for-like.
-7. Iterate from feedback: generalize (a routine that only passes its 2-3 evals is useless), trim dead weight (read transcripts, cut steps that waste turns), explain reasoning over rigid rules. Rerun everything per iteration. Stop when the user is happy or feedback goes empty.
-8. Tune triggers last: 8-10 should-trigger queries (varied phrasing, casual, edge uses) plus 8-10 near-miss should-not-trigger queries (shared keywords, wrong domain — never obviously-irrelevant ones). Measure precision/recall of `match_procedures()` in pytest; make descriptions a little pushy (our matcher undertriggers on paraphrase) but precise. Near-misses are the whole test.
-9. Ship: flip `status` draft→approved (human approval required — never self-approve); when replacing a routine, set `supersedes` instead of deleting.
+1. Capture intent from history first (tools used, step order, user corrections, input/output formats), then ask: (a) what should this routine enable, (b) when should it trigger, (c) expected output format/artifact paths, (d) need test cases? Verifiable file transforms get 2-3 test prompts; subjective style tasks skip assertions by default, user decides.
+2. Write the draft with `format_procedure()` shape only (name/triggers/scope/steps/rationale/pitfalls/example), then `write_file` to `workspace/artifacts/procedures/<slug>.md` with `status: draft`. Never write `status: approved` directly; never write outside `workspace/artifacts/`.
+3. Create 2-3 realistic student test prompts (e.g. "/ingest workspace/data", "turn this workflow into a routine"). Run each in a fresh `/new` thread following the draft steps with `read_file`/`write_file`/`search_text`/`edit_file`; for automated checks use the `MockLLMClient` eval pattern (`add_response()` enqueued exactly per iteration, assert side-effects + `result.is_success`).
+4. Evaluate with the user qualitatively (show created artifacts + completion summary) plus lightweight quantitative checks (`pytest`, `/lint` for `[[wikilinks]]`/orphans, `search_text` hit counts). Explain what was checked; do not invent scores.
+5. Iterate on feedback: generalize from the 2-3 examples (no overfit MUSTs, explain why per step), remove unproductive steps found in transcripts, bundle repeated helper work into the routine body. Re-run tests per iteration.
+6. Surface for approval, never auto-follow the draft: "I have a draft routine for X — use it?" Human flips `status: draft` to `approved` via `edit_file` with an exact unique target; prefer highest-version routine on conflict and flag conflicts instead of guessing.
+7. Optimize triggers for `match_procedures` (substring, case-insensitive, approved-only default): keep 4-8 specific pushy triggers covering paraphrases, add near-miss negatives to scope (when NOT to use), keep SKILL under ~500 lines with pointers to references.
 
 ## Rationale
-Subagents, browser reviewers, `eval-viewer`, and `claude -p` from the original skill-creator don't exist here, so each maps to a local equivalent: serial inline runs replace parallel subagents, pytest replaces the benchmark harness and viewer, the REPL replaces the browser review loop. Trigger-phrase evals replace description optimization because our triggering is substring matching over frontmatter, not LLM description reading — which is also why near-miss negatives matter more than positives. Baselines are non-negotiable: without the without-procedure run you can't tell skill from model.
-
+Draft-first plus human approval exists because `soul.md` forbids silently following drafts and auto-injection only fires on `approved` routines. Fresh-thread runs isolate the routine under test from stale `reset_injected_note` leaks. `MockLLMClient` with exact enqueue counts is required because under-enqueue falls back to echo responses that mask iteration bugs. Explaining why beats rigid MUSTs because the ReAct LLM generalizes better from rationale than from caps-lock constraints.
 ## Pitfalls
-- Overfitting to the 2-3 eval prompts (generalize; the routine will meet stranger requests).
-- Vague triggers that fire everywhere, or narrow ones that never fire — the trigger eval set catches both directions.
-- Duplicating `soul.md` inside the bundle instead of referencing it (two sources rot).
-- Storing facts as procedures (know-that vs know-how: preferences go to `memory_store`).
-- Skipping baselines or grading only vibes when assertions were possible.
-- Letting a distilled draft execute unapproved (policy: drafts surface, never silently followed).
+- Flipping `status` to `approved` without human confirmation (drafts must be surfaced, never followed silently).
+- Second SYSTEM message (`System message must be at the beginning.` 400) — merge facts/procedures into `messages[0]` via `inject_system_note`, never append a new SYSTEM.
+- `questionary.Choice(value=None)` returns the title string — use the `_CANCEL` sentinel for cancel paths.
+- `edit_file` requires the exact `target` exactly once; multiple hits error — `read_file` first and pick a unique snippet.
+- `search_text` is literal substring (`re.escape`), not full regex — do not rely on regex features.
+- Writing outside `workspace/artifacts/` or into `workspace/data/` (read-only source of truth); `allow_delete=False` — no delete tool exists.
+- Overfitting the routine to the 2-3 demo prompts with fiddly MUSTs instead of general patterns.
+- Skipping baselines: always compare with-routine vs without-routine (or old snapshot) before claiming improvement.
 
 ## Example
-Creating `ingest-lecture`: triggers ["ingest", "lecture slides"], test prompt "please ingest the slides for chapter 2" (different surface form, same job) vs baseline run without injection. With-procedure payload contains the list-first/page-range/link steps; baseline skips listing. Assertions: routine text in `mock.call_history`, artifacts exist with `[[wikilinks]]`, completion summary non-empty.
+Student: "turn my ingest workflow into a skill". Draft `skill-creator.md` (status draft) via `format_procedure`, test prompts: "ingest workspace/data lecture01.pdf", "improve ingest routine for PDFs". Fresh-thread runs produce `lecture-*.md` + `concept-*.md` cross-linked with `[[wikilinks]]`, `/lint` clean, `pytest` passes. User approves via `edit_file` flipping status; triggers later match "create skill" via `match_procedures`.
