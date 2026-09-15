@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import types
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import pytest
@@ -391,3 +392,328 @@ def test_engine_trace_carries_thread_messages_and_turns(tmp_path, enabled_metric
     assert event["turns"][1]["llm"]["reasoning_tokens"] == 4
     assert event["final_response"] == "finished"
     assert event["duration_s"] >= 0.0
+
+
+def test_usage_details_mapping():
+    """Verify token counts map onto input/output/total without double-billing."""
+    assert tracing.build_usage_details(10, 20, 30) == {"input": 10, "output": 20, "total": 30}
+    assert tracing.build_usage_details(10, 20, 0) == {"input": 10, "output": 20, "total": 30}
+    assert tracing.build_usage_details() == {"input": 0, "output": 0, "total": 0}
+
+
+def test_trace_event_carries_model_params_and_tools():
+    """Verify the event holds model parameters + available tools for export."""
+    event = tracing.build_run_event(
+        model="m",
+        status="success",
+        model_parameters={"temperature": 0.2, "max_tokens": 2048},
+        available_tools=["read_file", "echo_tool"],
+    )
+    assert event["model_parameters"] == {"temperature": 0.2, "max_tokens": 2048}
+    assert event["available_tools"] == ["read_file", "echo_tool"]
+
+
+class _FakeCM:
+    """Stands in for langfuse.propagate_attributes' context manager."""
+
+    def __init__(self, calls: Dict[str, Any], kwargs: Dict[str, Any]) -> None:
+        self._calls = calls
+        self._calls["propagate"] = kwargs
+
+    def __enter__(self) -> "_FakeCM":
+        self._calls["propagate_entered"] = True
+        return self
+
+    def __exit__(self, *args: Any) -> bool:
+        self._calls["propagate_exited"] = True
+        return False
+
+
+class _FakeChild:
+    """Stands in for Langfuse observation wrappers (span/agent/generation/tool)."""
+
+    def __init__(self, calls: Dict[str, Any], kwargs: Dict[str, Any], record: bool = True) -> None:
+        self._calls = calls
+        self.kwargs = kwargs
+        if record:
+            calls.setdefault("children", []).append(kwargs)
+
+    def start_observation(self, **kwargs: Any) -> "_FakeChild":
+        return _FakeChild(self._calls, kwargs)
+
+    def update(self, **kwargs: Any) -> None:
+        self.kwargs["updated"] = kwargs
+
+    def end(self, **kwargs: Any) -> None:
+        self._calls["ended"] = self._calls.get("ended", 0) + 1
+
+
+class _FakeLangfuseClient:
+    def __init__(self, calls: Dict[str, Any], **kwargs: Any) -> None:
+        self._calls = calls
+        calls["init"] = kwargs
+
+    def create_trace_id(self) -> str:
+        return "mock-trace-id"
+
+    def start_observation(self, **kwargs: Any) -> _FakeChild:
+        self._calls["observation"] = kwargs
+        return _FakeChild(self._calls, kwargs, record=False)
+
+    def flush(self) -> None:
+        self._calls["flushed"] = True
+
+
+def _install_fake_langfuse(monkeypatch, calls: Dict[str, Any]) -> None:
+    """Installs fake langfuse/langfuse.types modules (no network, no SDK)."""
+    fake_module = types.ModuleType("langfuse")
+    fake_module.Langfuse = lambda **kwargs: _FakeLangfuseClient(calls, **kwargs)  # type: ignore[attr-defined]
+    fake_module.propagate_attributes = lambda **kwargs: _FakeCM(calls, kwargs)  # type: ignore[attr-defined]
+    fake_types = types.ModuleType("langfuse.types")
+    fake_types.TraceContext = lambda **kwargs: kwargs  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langfuse", fake_module)
+    monkeypatch.setitem(sys.modules, "langfuse.types", fake_types)
+    monkeypatch.setattr(tracing, "_host_reachable", lambda host, timeout_s=3.0: True)
+    # Flush runs on a daemon thread; run it inline so assertions are race-free.
+    monkeypatch.setattr(tracing, "_flush_async", lambda client: calls.update(flushed=True))
+
+
+def test_export_emits_generation_and_tool_children(monkeypatch):
+    """Verify the fallback export nests model/usage generations + tool calls."""
+    calls: Dict[str, Any] = {}
+    _install_fake_langfuse(monkeypatch, calls)
+
+    event = tracing.build_run_event(
+        model="m",
+        status="success",
+        run_id="r1",
+        duration_s=2.0,
+        model_parameters={"temperature": 0.2},
+        available_tools=["echo_tool"],
+        turns=[
+            {
+                "n": 1,
+                "llm": {
+                    "content": "hi",
+                    "reasoning_content": "hmm",
+                    "tool_calls": [{"name": "echo_tool", "arguments": {}}],
+                    "finish_reason": "tool_calls",
+                    "prompt_tokens": 5,
+                    "completion_tokens": 7,
+                    "reasoning_tokens": 0,
+                },
+                "tools": [{"name": "echo_tool", "observation": "echoed"}],
+            }
+        ],
+    )
+    assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is True
+
+    gen = calls["children"][0]
+    assert gen["as_type"] == "generation"
+    assert gen["model"] == "m"
+    assert gen["usage_details"] == {"input": 5, "output": 7, "total": 12}
+    assert gen["output"]["reasoning_content"] == "hmm"
+    assert gen["input"]["available_tools"] == ["echo_tool"]
+
+    tool = calls["children"][1]
+    assert tool["name"] == "echo_tool"
+    assert tool["as_type"] == "tool"
+    assert tool["output"] == "echoed"
+    assert calls["flushed"] is True
+
+
+def test_live_run_span_lifecycle(monkeypatch):
+    """Verify live open/update/end stamps true latency with model+usage."""
+    calls: Dict[str, Any] = {}
+    _install_fake_langfuse(monkeypatch, calls)
+
+    handle = tracing.start_langfuse_run(
+        host="h",
+        public_key="p",
+        secret_key="s",
+        run_id="a" * 32,
+        model="live-model",
+        thread_id="tid",
+        thread_name="tn",
+        user_message="hello",
+        model_parameters={"temperature": 0.2},
+        available_tools=["echo_tool"],
+    )
+    assert handle is not None
+    assert calls["propagate"]["session_id"] == "tid"
+    assert calls["propagate"]["tags"] == ["tn"]
+
+    gen = tracing.start_langfuse_generation(
+        handle, name="llm-turn-1", turn=1, available_tools=["echo_tool"]
+    )
+    assert gen is not None
+    finish_time = datetime.now(timezone.utc)
+    tracing.finish_langfuse_generation(
+        gen,
+        output={"content": "hi"},
+        model="live-model",
+        usage_details=tracing.build_usage_details(5, 7, 12),
+        model_parameters={"temperature": 0.2},
+        completion_start_time=finish_time,
+    )
+    child = calls["children"][0]
+    assert child["as_type"] == "generation"
+    assert child["updated"]["model"] == "live-model"
+    assert child["updated"]["usage_details"] == {"input": 5, "output": 7, "total": 12}
+    assert child["updated"]["completion_start_time"] is finish_time
+
+    tool = tracing.start_langfuse_tool(handle["span"], name="echo_tool", input={})
+    tracing.finish_langfuse_tool(tool, output="echoed", metadata={"status": "ok"})
+    assert calls["children"][1]["name"] == "echo_tool"
+
+    event = tracing.build_run_event(
+        model="live-model", status="success", run_id="a" * 32,
+        duration_s=1.25, final_response="hi",
+    )
+    assert tracing.finish_langfuse_run(handle, event) is True
+    assert calls["observation"]["updated"]["name"] == "studymate-run:success (1.2s)"
+    assert calls["observation"]["updated"]["output"]["final_response"] == "hi"
+    assert calls["propagate_exited"] is True
+    assert calls["flushed"] is True
+
+
+def test_abort_langfuse_run_closes_span(monkeypatch):
+    """Verify an LLM failure still closes the live span as error."""
+    calls: Dict[str, Any] = {}
+    _install_fake_langfuse(monkeypatch, calls)
+
+    handle = tracing.start_langfuse_run(
+        host="h", public_key="p", secret_key="s", run_id="b" * 32, model="m"
+    )
+    assert tracing.abort_langfuse_run(handle, "boom") is True
+    assert calls["observation"]["updated"]["name"] == "studymate-run:error (0.0s)"
+    assert calls["observation"]["updated"]["level"] == "ERROR"
+    assert tracing.abort_langfuse_run(None, "x") is False
+    assert tracing.finish_langfuse_run(None, {}) is False
+
+
+def test_start_langfuse_run_none_without_backend(monkeypatch):
+    """Verify live open degrades to None (post-hoc fallback) when down."""
+    calls: Dict[str, Any] = {}
+    _install_fake_langfuse(monkeypatch, calls)
+    monkeypatch.setattr(tracing, "_host_reachable", lambda host, timeout_s=3.0: False)
+    assert tracing.start_langfuse_run(host="h", public_key="p", secret_key="s") is None
+    # Missing keys never touch the network either.
+    monkeypatch.setattr(tracing, "_host_reachable", lambda host, timeout_s=3.0: True)
+    assert tracing.start_langfuse_run(host="h") is None
+
+
+def test_engine_live_langfuse_spans_per_turn(tmp_path, enabled_metrics, monkeypatch):
+    """Verify the engine opens live generations/tools and finishes exactly once."""
+    import study_agent.core.engine as engine_mod
+
+    calls: Dict[str, Any] = {"generations": [], "tools": [], "finished": [], "fallback": []}
+    monkeypatch.setattr(
+        engine_mod, "start_langfuse_run", lambda **kw: {"span": "root", "params": kw}
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "start_langfuse_generation",
+        lambda handle, **kw: calls["generations"].append(kw) or {"gen": kw},
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "finish_langfuse_generation",
+        lambda span, **kw: calls.setdefault("gen_finished", []).append(kw),
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "start_langfuse_tool",
+        lambda parent, **kw: calls["tools"].append(kw) or {"tool": kw},
+    )
+    monkeypatch.setattr(engine_mod, "finish_langfuse_tool", lambda span, **kw: None)
+    monkeypatch.setattr(
+        engine_mod,
+        "finish_langfuse_run",
+        lambda handle, event: calls["finished"].append(event) or True,
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "export_langfuse_async",
+        lambda *a, **k: calls["fallback"].append(True),
+    )
+
+    class _EchoTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "echo_tool"
+
+        @property
+        def description(self) -> str:
+            return "Echoes back."
+
+        @property
+        def parameters(self) -> Dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        def execute(self, **kwargs: Any) -> str:
+            return "echoed"
+
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    llm = MockLLMClient()
+    llm.add_response(
+        content="",
+        tool_calls=[ToolCall(id="c1", name="echo_tool", arguments={})],
+        reasoning_content="thinking-1",
+        reasoning_tokens=6,
+    )
+    llm.add_response(content="finished", reasoning_tokens=4)
+    trace_file = tmp_path / "traces.jsonl"
+    obs = ObservabilityConfig(
+        metrics_enabled=True, langfuse_enabled=True, trace_file=str(trace_file)
+    )
+    engine = AgentEngine(llm_client=llm, tool_registry=registry, observability=obs)
+
+    result = engine.run("do the thing", ContextManager(), thread_id="t1", thread_name="tn")
+
+    assert result.is_success is True
+    assert len(calls["generations"]) == 2
+    assert len(calls["tools"]) == 1
+    assert len(calls["gen_finished"]) == 2
+    assert calls["gen_finished"][0]["usage_details"] == {"input": 10, "output": 10, "total": 20}
+    assert calls["gen_finished"][0]["completion_start_time"] is not None
+    assert len(calls["finished"]) == 1
+    assert calls["fallback"] == []
+    event = calls["finished"][0]
+    assert event["turns"][0]["llm"]["reasoning_content"] == "thinking-1"
+    assert event["turns"][0]["llm"]["latency_s"] >= 0.0
+    assert event["available_tools"] == ["echo_tool"]
+
+
+def test_engine_error_aborts_live_span(tmp_path, enabled_metrics, monkeypatch):
+    """Verify an LLM failure closes the live span and still raises."""
+    import study_agent.core.engine as engine_mod
+
+    calls: Dict[str, Any] = {"aborted": [], "fallback": []}
+    monkeypatch.setattr(engine_mod, "start_langfuse_run", lambda **kw: {"span": "root"})
+    monkeypatch.setattr(engine_mod, "start_langfuse_generation", lambda handle, **kw: {"gen": 1})
+    monkeypatch.setattr(engine_mod, "finish_langfuse_generation", lambda span, **kw: None)
+    monkeypatch.setattr(
+        engine_mod, "abort_langfuse_run", lambda handle, err: calls["aborted"].append(err) or True
+    )
+    monkeypatch.setattr(
+        engine_mod,
+        "export_langfuse_async",
+        lambda *a, **k: calls["fallback"].append(True),
+    )
+
+    class _Boom(MockLLMClient):
+        def chat(self, messages, tools=None):  # type: ignore[override]
+            raise TimeoutError("slow")
+
+    trace_file = tmp_path / "traces.jsonl"
+    obs = ObservabilityConfig(
+        metrics_enabled=True, langfuse_enabled=True, trace_file=str(trace_file)
+    )
+    engine = AgentEngine(llm_client=_Boom(), tool_registry=ToolRegistry(), observability=obs)
+
+    with pytest.raises(TimeoutError):
+        engine.run("boom", ContextManager())
+    assert calls["aborted"] == ["slow"]
+    assert calls["fallback"] == []

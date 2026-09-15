@@ -79,3 +79,94 @@ def test_reasoning_tokens_absent_means_zero(monkeypatch, details):
     client = _client_with_usage(monkeypatch, details)
     resp = client.chat([ChatMessage(role=Role.USER, content="hi")])
     assert resp.reasoning_tokens == 0
+
+
+def test_reasoning_content_parsed_when_present(monkeypatch):
+    """Verify chain-of-thought text is captured when the provider exposes it."""
+    client = OpenAICompatibleLLMClient(LLMConfig(api_key="test"))
+    message = SimpleNamespace(content="answer", tool_calls=None, reasoning_content="let me think")
+    choice = SimpleNamespace(message=message, finish_reason="stop")
+    usage = SimpleNamespace(
+        prompt_tokens=5, completion_tokens=12, total_tokens=17,
+        completion_tokens_details=None,
+    )
+    completion = SimpleNamespace(choices=[choice], usage=usage)
+    monkeypatch.setattr(client.client.chat.completions, "create", lambda **kw: completion)
+    resp = client.chat([ChatMessage(role=Role.USER, content="hi")])
+    assert resp.reasoning_content == "let me think"
+    assert resp.content == "answer"
+
+
+def test_reasoning_content_absent_means_none(monkeypatch):
+    """Verify missing thinking fields degrade to None, never raise."""
+    client = _client_with_usage(monkeypatch, None)
+    resp = client.chat([ChatMessage(role=Role.USER, content="hi")])
+    assert resp.reasoning_content is None
+
+
+def test_mock_llm_reasoning_content_passthrough():
+    """Verify scripted thinking text survives the mock client."""
+    mock = MockLLMClient()
+    mock.add_response(content="done", reasoning_content="thinking", reasoning_tokens=3)
+    resp = mock.chat([ChatMessage(role=Role.USER, content="hi")])
+    assert resp.reasoning_content == "thinking"
+    assert resp.reasoning_tokens == 3
+
+
+def _client_with_message(monkeypatch, message):
+    """Builds a client returning one scripted message envelope."""
+    client = OpenAICompatibleLLMClient(LLMConfig(api_key="test"))
+    choice = SimpleNamespace(message=message, finish_reason="stop")
+    usage = SimpleNamespace(
+        prompt_tokens=5, completion_tokens=12, total_tokens=17,
+        completion_tokens_details=None,
+    )
+    completion = SimpleNamespace(choices=[choice], usage=usage)
+    monkeypatch.setattr(client.client.chat.completions, "create", lambda **kw: completion)
+    return client
+
+
+def test_think_blocks_split_from_content(monkeypatch):
+    """Verify inline <think> thinking splits into reasoning_content."""
+    message = SimpleNamespace(
+        content="<think>let me plan</think>\n\nFinal answer", tool_calls=None
+    )
+    resp = _client_with_message(monkeypatch, message).chat(
+        [ChatMessage(role=Role.USER, content="hi")]
+    )
+    assert resp.content == "Final answer"
+    assert resp.reasoning_content == "let me plan"
+
+
+def test_reasoning_field_wins_but_content_stripped(monkeypatch):
+    """Verify a parsed field beats inline tags, which are still stripped."""
+    message = SimpleNamespace(
+        content="<think>dup</think>Answer",
+        tool_calls=None,
+        reasoning_content="field-thinking",
+    )
+    resp = _client_with_message(monkeypatch, message).chat(
+        [ChatMessage(role=Role.USER, content="hi")]
+    )
+    assert resp.content == "Answer"
+    assert resp.reasoning_content == "field-thinking"
+
+
+def test_unclosed_think_block_treated_as_reasoning(monkeypatch):
+    """Verify a block cut off by max_tokens still separates its remainder."""
+    message = SimpleNamespace(content="Answer so far<think>trailing thought", tool_calls=None)
+    resp = _client_with_message(monkeypatch, message).chat(
+        [ChatMessage(role=Role.USER, content="hi")]
+    )
+    assert resp.content == "Answer so far"
+    assert resp.reasoning_content == "trailing thought"
+
+
+def test_content_without_think_untouched(monkeypatch):
+    """Verify ordinary markup never triggers the split."""
+    message = SimpleNamespace(content="plain <b>html</b>", tool_calls=None)
+    resp = _client_with_message(monkeypatch, message).chat(
+        [ChatMessage(role=Role.USER, content="hi")]
+    )
+    assert resp.content == "plain <b>html</b>"
+    assert resp.reasoning_content is None

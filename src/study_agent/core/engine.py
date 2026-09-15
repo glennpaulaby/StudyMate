@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 from study_agent.config.settings import AgentConfig, CompactionConfig, ObservabilityConfig
 from study_agent.core.compaction import (
@@ -20,11 +21,20 @@ from study_agent.observability.metrics import (
     observe_run,
 )
 from study_agent.observability.tracing import (
+    abort_langfuse_run,
     append_trace,
     build_run_event,
+    build_usage_details,
     export_langfuse_async,
+    finish_langfuse_generation,
+    finish_langfuse_run,
+    finish_langfuse_tool,
     new_run_id,
+    start_langfuse_generation,
+    start_langfuse_run,
+    start_langfuse_tool,
     truncate_args,
+    truncate_text,
 )
 from study_agent.tools.base import ToolRegistry, tool_source
 
@@ -73,6 +83,28 @@ class AgentEngine:
         obs = self.observability
         return bool(obs and (obs.metrics_enabled or obs.langfuse_enabled))
 
+    def _llm_params(self) -> Dict[str, Any]:
+        """Best-effort model parameters for Langfuse generations (client-agnostic)."""
+        config = getattr(self.llm_client, "config", None)
+        params: Dict[str, Any] = {}
+        for key in ("temperature", "max_tokens"):
+            value = getattr(config, key, None) if config is not None else None
+            if value is not None:
+                params[key] = value
+        return params
+
+    @staticmethod
+    def _tool_names(schemas: Optional[List[Dict[str, Any]]]) -> List[str]:
+        """Available tool names for Langfuse generation input (best-effort)."""
+        names: List[str] = []
+        for schema in schemas or []:
+            if isinstance(schema, dict):
+                fn = schema.get("function", {})
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if name:
+                    names.append(str(name))
+        return names
+
     def _finish(
         self,
         *,
@@ -94,8 +126,13 @@ class AgentEngine:
         thread_name: str = "",
         reasoning_tokens: int = 0,
         error_message: str = "",
+        live_handle: Optional[Dict[str, Any]] = None,
     ) -> AgentRunResult:
-        """Emits run metrics + one trace event, then builds the result."""
+        """Emits run metrics + one trace event, then builds the result.
+
+        When a live Langfuse span is open, it is closed with the final event
+        (true Latency); otherwise the post-hoc fallback export is used.
+        """
         duration_s = time.perf_counter() - run_start
         observe_run(status, duration_s, iterations)
         if self._obs_active():
@@ -121,16 +158,23 @@ class AgentEngine:
                 compactions=compactions,
                 duration_s=duration_s,
                 error=error_message,
+                model_parameters=self._llm_params(),
+                available_tools=self._tool_names(
+                    self.tool_registry.list_schemas() if self.tool_registry else None
+                ),
             )
             obs = self.observability
             append_trace(obs.trace_file, event)
             if obs.langfuse_enabled:
-                export_langfuse_async(
-                    event,
-                    host=obs.langfuse_host,
-                    public_key=obs.langfuse_public_key,
-                    secret_key=obs.langfuse_secret_key,
-                )
+                if live_handle:
+                    finish_langfuse_run(live_handle, event)
+                else:
+                    export_langfuse_async(
+                        event,
+                        host=obs.langfuse_host,
+                        public_key=obs.langfuse_public_key,
+                        secret_key=obs.langfuse_secret_key,
+                    )
         return AgentRunResult(
             final_response=final_response,
             iterations=iterations,
@@ -192,6 +236,30 @@ class AgentEngine:
         max_chars = self.observability.trace_max_chars
 
         schemas = self.tool_registry.list_schemas() if self.tool_registry else None
+        model_parameters = self._llm_params()
+        tool_names = self._tool_names(schemas)
+
+        # Live Langfuse root span: opened now so the UI Latency column
+        # measures the real run. None when exporting is unavailable —
+        # per-turn helpers and _finish degrade to the post-hoc fallback.
+        live_handle: Optional[Dict[str, Any]] = None
+        if self.observability.langfuse_enabled:
+            try:
+                live_handle = start_langfuse_run(
+                    host=self.observability.langfuse_host,
+                    public_key=self.observability.langfuse_public_key,
+                    secret_key=self.observability.langfuse_secret_key,
+                    run_id=run_id,
+                    model=model,
+                    thread_id=thread_id,
+                    thread_name=thread_name,
+                    user_message=user_message,
+                    model_parameters=model_parameters,
+                    available_tools=tool_names,
+                )
+            except Exception as e:
+                logger.debug(f"Live Langfuse span skipped: {e}")
+                live_handle = None
 
         while iterations < self.config.max_iterations:
             iterations += 1
@@ -216,12 +284,31 @@ class AgentEngine:
 
             # 1. Reason: Request completion from LLM with available tools
             llm_start = time.perf_counter()
+            gen_span = None
+            if live_handle is not None:
+                gen_span = start_langfuse_generation(
+                    live_handle,
+                    name=f"llm-turn-{iterations}",
+                    turn=iterations,
+                    available_tools=tool_names,
+                )
             try:
                 response = self.llm_client.chat(
                     messages=context.get_messages(),
                     tools=schemas if schemas else None
                 )
             except Exception as e:
+                llm_wall_end = datetime.now(timezone.utc)
+                finish_langfuse_generation(
+                    gen_span,
+                    output={"error": str(e)},
+                    model=model,
+                    usage_details=build_usage_details(),
+                    model_parameters=model_parameters,
+                    completion_start_time=llm_wall_end,
+                    level="ERROR",
+                    status_message=str(e),
+                )
                 llm_status = _llm_error_status(e)
                 observe_llm(model, llm_status, time.perf_counter() - llm_start)
                 observe_component_latency("llm", time.perf_counter() - llm_start)
@@ -244,6 +331,9 @@ class AgentEngine:
                         compactions += 1
                         observe_compaction("overflow")
                         continue
+                # Terminal LLM failure: close the live span (the REPL error
+                # path only appends JSONL) before surfacing to the caller.
+                abort_langfuse_run(live_handle, str(e))
                 raise
 
             observe_llm(
@@ -260,6 +350,33 @@ class AgentEngine:
             total_completion_tokens += response.completion_tokens
             total_tokens += response.total_tokens
             total_reasoning_tokens += response.reasoning_tokens
+            llm_wall_end = datetime.now(timezone.utc)
+            llm_latency_s = round(time.perf_counter() - llm_start, 3)
+
+            # Non-streaming TTFT ≈ full latency: the first token arrives with
+            # the whole response, so completion start = receipt time.
+            finish_langfuse_generation(
+                gen_span,
+                output={
+                    "content": truncate_text(response.content or "", max_chars),
+                    "reasoning_content": truncate_text(
+                        response.reasoning_content or "", max_chars
+                    ),
+                    "tool_calls": [
+                        {"name": tc.name, "arguments": truncate_args(tc.arguments, max_chars)}
+                        for tc in response.tool_calls
+                    ],
+                    "finish_reason": response.finish_reason or "",
+                },
+                model=model,
+                usage_details=build_usage_details(
+                    response.prompt_tokens,
+                    response.completion_tokens,
+                    response.total_tokens,
+                ),
+                model_parameters=model_parameters,
+                completion_start_time=llm_wall_end,
+            )
 
             # Trace record for this iteration (LLM "parts"); tool observations
             # append below as they execute.
@@ -267,6 +384,7 @@ class AgentEngine:
                 "n": iterations,
                 "llm": {
                     "content": response.content or "",
+                    "reasoning_content": response.reasoning_content or "",
                     "tool_calls": [
                         {"name": tc.name, "arguments": truncate_args(tc.arguments, max_chars)}
                         for tc in response.tool_calls
@@ -275,6 +393,7 @@ class AgentEngine:
                     "prompt_tokens": response.prompt_tokens,
                     "completion_tokens": response.completion_tokens,
                     "reasoning_tokens": response.reasoning_tokens,
+                    "latency_s": llm_latency_s,
                 },
                 "tools": [],
             }
@@ -321,6 +440,7 @@ class AgentEngine:
                         thread_name=thread_name,
                         reasoning_tokens=total_reasoning_tokens,
                         error_message=message,
+                        live_handle=live_handle,
                     )
 
                 if response.finish_reason == "length" and iterations < self.config.max_iterations:
@@ -348,6 +468,7 @@ class AgentEngine:
                     thread_id=thread_id,
                     thread_name=thread_name,
                     reasoning_tokens=total_reasoning_tokens,
+                    live_handle=live_handle,
                 )
 
             # 3. Act: Execute each tool call requested by LLM
@@ -357,11 +478,31 @@ class AgentEngine:
                     on_tool_start(tool_call)
 
                 tool_start = time.perf_counter()
+                tool_span = None
+                if live_handle is not None:
+                    tool_span = start_langfuse_tool(
+                        live_handle["span"],
+                        name=tool_call.name,
+                        input=truncate_args(tool_call.arguments, max_chars),
+                        metadata={"turn": iterations},
+                    )
                 observation = self.tool_registry.execute(
                     name=tool_call.name,
                     arguments=tool_call.arguments
                 )
                 tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
+                tool_status = "error" if observation.startswith("Error") else "ok"
+                finish_langfuse_tool(
+                    tool_span,
+                    output=truncate_text(observation, max_chars),
+                    metadata={
+                        "turn": iterations,
+                        "status": tool_status,
+                        "duration_ms": round(tool_duration_ms, 2),
+                    },
+                    level="ERROR" if tool_status == "error" else "DEFAULT",
+                    status_message=truncate_text(observation, 500) if tool_status == "error" else None,
+                )
                 registered = self.tool_registry.get(tool_call.name) if self.tool_registry else None
                 tool_records.append(
                     {
@@ -405,4 +546,5 @@ class AgentEngine:
             thread_name=thread_name,
             reasoning_tokens=total_reasoning_tokens,
             error_message=f"Reached maximum iterations ({self.config.max_iterations})",
+            live_handle=live_handle,
         )

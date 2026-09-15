@@ -93,6 +93,8 @@ def build_run_event(
     compactions: int = 0,
     duration_s: float = 0.0,
     error: str = "",
+    model_parameters: Optional[Dict[str, Any]] = None,
+    available_tools: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Builds one schema-v2 trace event (pure, no I/O — trivially testable).
 
@@ -107,6 +109,8 @@ def build_run_event(
         "parent_run_id": parent_run_id,
         "timestamp": _utc_now_iso(),
         "model": model,
+        "model_parameters": model_parameters or {},
+        "available_tools": available_tools or [],
         "thread": {"id": thread_id, "name": thread_name},
         "iterations": iterations,
         "tokens": {
@@ -170,14 +174,405 @@ def _host_reachable(host: str, timeout_s: float = 3.0) -> bool:
         return True
     except Exception:
         return False
-    """Keeps our 32-hex run id (the backend-validated format); else mints one."""
-    cleaned = (run_id or "").strip().lower().replace("-", "")
-    if len(cleaned) == 32 and all(c in "0123456789abcdef" for c in cleaned):
-        return cleaned
+
+
+def build_usage_details(
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+) -> Dict[str, int]:
+    """Maps harness token counts onto Langfuse's usage_details envelope.
+
+    Only input/output/total are sent: reasoning tokens are already counted
+    inside completion/output per the OpenAI envelope, and a separate key
+    risks double-billing cost. The reasoning breakout stays visible in
+    ``metadata.tokens`` and per-turn records instead.
+    """
+    prompt = max(0, int(prompt_tokens or 0))
+    completion = max(0, int(completion_tokens or 0))
+    total = max(0, int(total_tokens or (prompt + completion)))
+    return {"input": prompt, "output": completion, "total": total}
+
+
+def _make_client(host: str, public_key: str, secret_key: str, timeout_s: float) -> Optional[Any]:
+    """Builds a Langfuse client, or None when the SDK/keys are unavailable."""
     try:
-        return str(client.create_trace_id())
-    except Exception:
-        return uuid.uuid4().hex
+        from langfuse import Langfuse
+    except ImportError:
+        logger.debug("Langfuse SDK missing; skipping export.")
+        return None
+    if not public_key or not secret_key:
+        logger.debug("Langfuse keys unset; skipping export.")
+        return None
+    _quiet_otel_loggers()
+    try:
+        return Langfuse(
+            public_key=public_key, secret_key=secret_key, host=host, timeout=timeout_s
+        )
+    except Exception as e:
+        logger.warning(f"Langfuse client init failed (run unaffected): {e}")
+        return None
+
+
+def _enter_trace_context(
+    thread_id: str, thread_name: str, run_id: str
+) -> Optional[Any]:
+    """Propagates session/tags/trace-name onto the current OTel context.
+
+    Returns the context manager for later exit, or None when unavailable.
+    Best-effort: trace-level columns (Session ID, Trace Tags, Trace Name)
+    stay empty rather than ever failing a run.
+    """
+    try:
+        from langfuse import propagate_attributes
+
+        cm = propagate_attributes(
+            session_id=thread_id or None,
+            tags=[thread_name] if thread_name else None,
+            trace_name=f"studymate:{thread_name}" if thread_name else f"studymate-run:{run_id[:8]}",
+        )
+        enter = getattr(cm, "__enter__", None)
+        if callable(enter):
+            enter()
+            return cm
+    except Exception as e:
+        logger.debug(f"Langfuse trace context skipped: {e}")
+    return None
+
+
+def _exit_trace_context(cm: Optional[Any]) -> None:
+    """Restores the OTel context entered by `_enter_trace_context`."""
+    if cm is None:
+        return
+    try:
+        exit_fn = getattr(cm, "__exit__", None)
+        if callable(exit_fn):
+            exit_fn(None, None, None)
+    except Exception as e:
+        logger.debug(f"Langfuse trace context exit skipped: {e}")
+
+
+def _flush_async(client: Any) -> threading.Thread:
+    """Flushes the OTel batch exporter off the hot path (daemon, never raises)."""
+
+    def _target() -> None:
+        try:
+            client.flush()
+        except Exception as e:
+            logger.warning(f"Langfuse flush failed (run unaffected): {e}")
+
+    thread = threading.Thread(target=_target, name="langfuse-flush", daemon=True)
+    thread.start()
+    return thread
+
+
+def _root_output(event: Dict[str, Any], duration_s: float) -> Dict[str, Any]:
+    """Shared agent-span output payload (full turns + true duration)."""
+    return {
+        "final_response": event.get("final_response", ""),
+        "turns": event.get("turns", []),
+        "tools": event.get("tools", []),
+        "duration_s": duration_s,
+        "error": event.get("error", ""),
+    }
+
+
+def _root_metadata(event: Dict[str, Any], duration_s: float) -> Dict[str, Any]:
+    """Shared agent-span metadata payload (model, tokens, thread, tools)."""
+    tokens = event.get("tokens", {}) if isinstance(event.get("tokens"), dict) else {}
+    return {
+        "model": event.get("model", ""),
+        "model_parameters": event.get("model_parameters", {}),
+        "available_tools": event.get("available_tools", []),
+        "parent_run_id": event.get("parent_run_id", ""),
+        "compactions": event.get("compactions", 0),
+        "tokens": tokens,
+        "duration_s": duration_s,
+    }
+
+
+def _emit_child_observations(
+    parent: Any,
+    event: Dict[str, Any],
+    *,
+    max_chars: int = DEFAULT_TRACE_MAX_CHARS,
+) -> None:
+    """Adds per-turn generation + per-tool children to a live or post-hoc span.
+
+    Generation-type children are what populate Langfuse's Provided Model
+    Name, Usage, Cost (once prices are configured), Time To First Token and
+    Tool Calls columns — attributes the SDK drops on span-like observations,
+    which is why the parent stays ``as_type="agent"``. Each child is
+    individually guarded so one oversized payload never fails the export.
+    """
+    model = str(event.get("model", ""))
+    params = event.get("model_parameters", {})
+    model_parameters = params if isinstance(params, dict) else {}
+    available = event.get("available_tools", [])
+    available_tools = available if isinstance(available, list) else []
+    turns = event.get("turns", [])
+    if not isinstance(turns, list):
+        return
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        try:
+            llm = turn.get("llm", {}) if isinstance(turn.get("llm"), dict) else {}
+            tools = turn.get("tools", []) if isinstance(turn.get("tools"), list) else []
+            gen = parent.start_observation(
+                name=f"llm-turn-{turn.get('n', '?')}",
+                as_type="generation",
+                input={"turn": turn.get("n"), "available_tools": available_tools},
+                output={
+                    "content": truncate_text(llm.get("content", ""), max_chars),
+                    "reasoning_content": truncate_text(
+                        llm.get("reasoning_content", "") or "", max_chars
+                    ),
+                    "tool_calls": llm.get("tool_calls", []),
+                    "finish_reason": llm.get("finish_reason", ""),
+                },
+                metadata={"turn": turn.get("n")},
+                model=model or None,
+                model_parameters=model_parameters or None,
+                usage_details=build_usage_details(
+                    llm.get("prompt_tokens", 0),
+                    llm.get("completion_tokens", 0),
+                    (llm.get("prompt_tokens", 0) or 0) + (llm.get("completion_tokens", 0) or 0),
+                ),
+                # No completion_start_time post-hoc: backdating it would fake
+                # Time To First Token. Live generations set it for real.
+            )
+        except Exception as e:
+            logger.debug(f"Langfuse generation child skipped: {e}")
+            continue
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            try:
+                args: Any = ""
+                calls = llm.get("tool_calls", [])
+                if isinstance(calls, list):
+                    for call in calls:
+                        if isinstance(call, dict) and call.get("name") == tool.get("name"):
+                            args = call.get("arguments", "")
+                            break
+                child = gen.start_observation(
+                    name=str(tool.get("name", "tool")),
+                    as_type="tool",
+                    input=truncate_args(args, max_chars),
+                    output=truncate_text(str(tool.get("observation", "")), max_chars),
+                    metadata={"turn": turn.get("n")},
+                )
+                child.end()
+            except Exception as e:
+                logger.debug(f"Langfuse tool child skipped: {e}")
+                continue
+        try:
+            gen.end()
+        except Exception as e:
+            logger.debug(f"Langfuse generation end skipped: {e}")
+
+
+def start_langfuse_run(
+    *,
+    host: str,
+    public_key: str = "",
+    secret_key: str = "",
+    timeout_s: float = 30.0,
+    run_id: str = "",
+    model: str = "",
+    thread_id: str = "",
+    thread_name: str = "",
+    user_message: str = "",
+    model_parameters: Optional[Dict[str, Any]] = None,
+    available_tools: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Opens a live root agent span at run start (true Latency). Never raises.
+
+    The span stays open for the whole ReAct loop, so the UI's Latency column
+    measures the real run. Returns an opaque handle for the per-turn helpers
+    and `finish_langfuse_run`, or None when exporting is unavailable.
+    """
+    client = _make_client(host, public_key, secret_key, timeout_s)
+    if client is None:
+        return None
+    if not _host_reachable(host):
+        logger.warning(f"Langfuse trace export skipped (host unreachable, run unaffected): {host}")
+        return None
+    try:
+        from langfuse.types import TraceContext
+    except ImportError:
+        logger.debug("Langfuse SDK types missing; skipping export.")
+        return None
+    prop_ctx = _enter_trace_context(thread_id, thread_name, run_id or "unknown")
+    try:
+        thread = {"id": thread_id, "name": thread_name}
+        span = client.start_observation(
+            trace_context=TraceContext(
+                trace_id=_langfuse_trace_id(client, run_id)
+            ),
+            name=f"studymate-run:{thread_name or (run_id[:8] if run_id else 'run')}",
+            as_type="agent",
+            input={
+                "thread": thread,
+                "user_message": truncate_text(user_message),
+            },
+            metadata={
+                "model": model,
+                "model_parameters": model_parameters or {},
+                "available_tools": available_tools or [],
+                "thread": thread,
+            },
+            level="DEFAULT",
+        )
+        return {"client": client, "span": span, "prop_ctx": prop_ctx, "run_id": run_id}
+    except Exception as e:
+        logger.warning(f"Langfuse trace start failed (run unaffected): {e}")
+        _exit_trace_context(prop_ctx)
+        return None
+
+
+def start_langfuse_generation(
+    handle: Optional[Dict[str, Any]],
+    *,
+    name: str,
+    turn: Optional[int] = None,
+    available_tools: Optional[List[str]] = None,
+) -> Optional[Any]:
+    """Opens a live generation child before an LLM call. Never raises."""
+    if not handle or "span" not in handle:
+        return None
+    try:
+        return handle["span"].start_observation(
+            name=name,
+            as_type="generation",
+            input={"turn": turn, "available_tools": available_tools or []},
+            metadata={"turn": turn} if turn is not None else {},
+        )
+    except Exception as e:
+        logger.debug(f"Langfuse generation start skipped: {e}")
+        return None
+
+
+def finish_langfuse_generation(
+    span: Optional[Any],
+    *,
+    output: Optional[Dict[str, Any]] = None,
+    model: str = "",
+    usage_details: Optional[Dict[str, int]] = None,
+    model_parameters: Optional[Dict[str, Any]] = None,
+    completion_start_time: Optional[Any] = None,
+    level: str = "DEFAULT",
+    status_message: Optional[str] = None,
+) -> None:
+    """Fills a live generation child (model/usage/TTFT) and ends it."""
+    if span is None:
+        return
+    try:
+        span.update(
+            output=output,
+            model=model or None,
+            usage_details=usage_details,
+            model_parameters=model_parameters or None,
+            completion_start_time=completion_start_time,
+            level=level,  # type: ignore[arg-type]
+            status_message=status_message,
+        )
+    except Exception as e:
+        logger.debug(f"Langfuse generation update skipped: {e}")
+    try:
+        span.end()
+    except Exception as e:
+        logger.debug(f"Langfuse generation end skipped: {e}")
+
+
+def start_langfuse_tool(
+    parent: Optional[Any],
+    *,
+    name: str,
+    input: Optional[Any] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Any]:
+    """Opens a live tool child before a tool executes. Never raises."""
+    if parent is None:
+        return None
+    try:
+        return parent.start_observation(
+            name=name,
+            as_type="tool",
+            input=input,
+            metadata=metadata or {},
+        )
+    except Exception as e:
+        logger.debug(f"Langfuse tool start skipped: {e}")
+        return None
+
+
+def finish_langfuse_tool(
+    span: Optional[Any],
+    *,
+    output: Optional[Any] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    level: str = "DEFAULT",
+    status_message: Optional[str] = None,
+) -> None:
+    """Fills a live tool child and ends it (true tool latency)."""
+    if span is None:
+        return
+    try:
+        span.update(
+            output=output,
+            metadata=metadata or {},
+            level=level,  # type: ignore[arg-type]
+            status_message=status_message,
+        )
+    except Exception as e:
+        logger.debug(f"Langfuse tool update skipped: {e}")
+    try:
+        span.end()
+    except Exception as e:
+        logger.debug(f"Langfuse tool end skipped: {e}")
+
+
+def finish_langfuse_run(handle: Optional[Dict[str, Any]], event: Dict[str, Any]) -> bool:
+    """Closes the live root span with the final event (true Latency).
+
+    `update` + `end` are synchronous and cheap (just stamp times); only the
+    network `flush` goes to a daemon thread. Never raises.
+    """
+    if not handle or "span" not in handle or "client" not in handle:
+        return False
+    span, client = handle["span"], handle["client"]
+    try:
+        status = str(event.get("status", "unknown"))
+        duration_s = float(event.get("duration_s", 0.0) or 0.0)
+        span.update(
+            name=f"studymate-run:{status} ({duration_s:.1f}s)",
+            output=_root_output(event, duration_s),
+            metadata=_root_metadata(event, duration_s),
+            level="ERROR" if status == "error" else "DEFAULT",  # type: ignore[arg-type]
+            status_message=str(event.get("error", "")) or None,
+        )
+    except Exception as e:
+        logger.debug(f"Langfuse run update skipped: {e}")
+    try:
+        span.end()
+    except Exception as e:
+        logger.debug(f"Langfuse run end skipped: {e}")
+    finally:
+        _exit_trace_context(handle.get("prop_ctx"))
+    _flush_async(client)
+    return True
+
+
+def abort_langfuse_run(handle: Optional[Dict[str, Any]], error: str) -> bool:
+    """Closes a live span when the run raises (LLM failure path). Never raises."""
+    if not handle:
+        return False
+    return finish_langfuse_run(
+        handle,
+        {"status": "error", "duration_s": 0.0, "final_response": "", "error": error},
+    )
 
 
 def export_langfuse(
@@ -188,25 +583,22 @@ def export_langfuse(
     secret_key: str = "",
     timeout_s: float = 30.0,
 ) -> bool:
-    """Sends one event to self-hosted Langfuse (v4 OTel API). Never raises."""
-    try:
-        from langfuse import Langfuse
-        from langfuse.types import TraceContext
-    except ImportError:
-        logger.debug("Langfuse SDK missing; skipping export.")
+    """Sends one event to self-hosted Langfuse (v4 OTel API). Never raises.
+
+    Post-hoc fallback used when no live span exists (error paths outside the
+    engine, direct callers). The span duration is ~0 by construction — the
+    true-latency path is `start_langfuse_run`/`finish_langfuse_run`, which the
+    engine holds open across the whole ReAct loop.
+    """
+    client = _make_client(host, public_key, secret_key, timeout_s)
+    if client is None:
         return False
-    if not public_key or not secret_key:
-        logger.debug("Langfuse keys unset; skipping export.")
-        return False
-    _quiet_otel_loggers()
     if not _host_reachable(host):
         logger.warning(f"Langfuse trace export skipped (host unreachable, run unaffected): {host}")
         return False
     try:
-        client = Langfuse(
-            public_key=public_key, secret_key=secret_key, host=host, timeout=timeout_s
-        )
-        tokens = event.get("tokens", {}) if isinstance(event.get("tokens"), dict) else {}
+        from langfuse.types import TraceContext
+
         status = str(event.get("status", "unknown"))
         thread = event.get("thread", {}) if isinstance(event.get("thread"), dict) else {}
         messages = event.get("messages", [])
@@ -215,10 +607,6 @@ def export_langfuse(
             trace_context=TraceContext(
                 trace_id=_langfuse_trace_id(client, str(event.get("run_id", "")))
             ),
-            # NOTE: the span's own start/end wrap only this export call, so the
-            # UI's "own span duration" is ~0 by construction. The true run
-            # duration rides in the name + output below (the SDK offers no
-            # backdated span start).
             name=f"studymate-run:{status} ({duration_s:.1f}s)",
             as_type="agent",
             input={
@@ -226,23 +614,12 @@ def export_langfuse(
                 "message_count": len(messages) if isinstance(messages, list) else 0,
                 "messages": messages,
             },
-            output={
-                "final_response": event.get("final_response", ""),
-                "turns": event.get("turns", []),
-                "tools": event.get("tools", []),
-                "duration_s": duration_s,
-                "error": event.get("error", ""),
-            },
-            metadata={
-                "model": event.get("model", ""),
-                "parent_run_id": event.get("parent_run_id", ""),
-                "compactions": event.get("compactions", 0),
-                "tokens": tokens,
-                "duration_s": duration_s,
-            },
+            output=_root_output(event, duration_s),
+            metadata=_root_metadata(event, duration_s),
             level="ERROR" if status == "error" else "DEFAULT",
             status_message=str(event.get("error", "")) or None,
         )
+        _emit_child_observations(span, event)
         span.end()
         client.flush()
         return True

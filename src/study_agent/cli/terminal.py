@@ -45,7 +45,6 @@ from study_agent.observability.metrics import (
 from study_agent.observability.tracing import (
     append_trace,
     build_run_event,
-    export_langfuse_async,
     new_run_id,
 )
 from study_agent.study.griller import SocraticGriller
@@ -1085,13 +1084,9 @@ def run_cli(
                             error=str(e),
                         )
                         append_trace(obs_cfg.trace_file, event)
-                        if obs_cfg.langfuse_enabled:
-                            export_langfuse_async(
-                                event,
-                                host=obs_cfg.langfuse_host,
-                                public_key=obs_cfg.langfuse_public_key,
-                                secret_key=obs_cfg.langfuse_secret_key,
-                            )
+                        # No post-hoc Langfuse export here: the engine owns a
+                        # live span per run and already closed it with the
+                        # error (true latency) before re-raising.
                     console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
                     continue
 
