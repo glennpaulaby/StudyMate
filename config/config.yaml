@@ -36,12 +36,15 @@ tools:
     enabled: true
     # The workspace root is the default Obsidian vault.
     vault_path: "./workspace/"
-    # The external server is started on demand over stdio.
-    search_command: "uvx"
-    search_args:
-      - "--with"
-      - "duckduckgo-mcp-server[browser]"
-      - "duckduckgo-mcp-server"
+    # The external server is started on demand over stdio and kept alive
+    # across calls. The binary is prebaked into the image (Dockerfile) and put
+    # on PATH via /opt/mcp/ddg/bin. On a host without the bake-in, either
+    # `uv tool install "duckduckgo-mcp-server[browser]==0.7.0"` (and ensure
+    # ~/.local/bin is on PATH) or fall back to uvx:
+    #   search_command: "uvx"
+    #   search_args: ["duckduckgo-mcp-server==0.7.0"]
+    search_command: "duckduckgo-mcp-server"
+    search_args: []
 
 memory:
   enabled: true

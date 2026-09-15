@@ -1,0 +1,12 @@
+# My contributions:
+- bugfix: web_search was re-installing half its dependency tree on EVERY call. Cause: `ExternalMCPService` spawned a fresh `uvx --with duckduckgo-mcp-server ...` process per call and killed it right after. Rewrote it to keep one warm session — lazy spawn on first use, reused for everything after, restarts once if the connection dies
+- infra: baked the DDG server into the image as its own venv (`/opt/mcp/ddg`) instead of resolving at runtime. It has to be separate: the server wants `mcp>=2.1`, our agent pins `mcp<2.0`, one shared env would've quietly bricked the agent's MCP client. Also put `/opt/mcp/ddg/bin` on PATH so the config is just `duckduckgo-mcp-server` and works the same in Docker and on a host
+- bugfix: the permission prompt "disappeared". The thinking spinner is a Rich Live with a repaint thread that kept redrawing over the `y/n/always` line — looked frozen, was actually waiting for input. Handler now pauses the spinner while asking, resumes after
+- feature: system prompt got a current date. Big one — without it the model answers "latest model released?" from stale 2024 training data, which is exactly where the "Gemini 2.0 Flash or Pro or Ultra release 2024 2025" garbage queries came from
+- prompt: search rules in the `web_search` description + a new soul.md section: use the user's own words, no invented model names or years, one subject per call. Queries are clean now
+- quality: missing server binary fails once with a "install it like this" hint instead of leaking a raw WinError twice; +3 unit tests for the session lifecycle, +3 e2e tests against the real live server (discovery, invocation, session reuse). Updated 2 prompt snapshots that the date change broke. Full suite: 176 passed
+- validation: rebuilt the image and ran the actual demo in Docker: visible prompt → y → search → fetch → answer grounded in Google's real changelog (Gemini 3.8 Live), zero install chatter
+
+# Team:
+- Heads up for everyone: `(studymate)` venv prompt + `WinError 2` means you're NOT in the container. PowerShell continues lines with a backtick, not `\`, so multi-line `docker run` silently breaks. Just use `docker compose run --rm studymate`
+- The spinner fix makes the Week 3 permission gate actually demo-able: consequential-tier MCP tools reach a human, get approved, and run through the Week 2 integration

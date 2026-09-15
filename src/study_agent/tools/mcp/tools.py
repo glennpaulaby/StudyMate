@@ -297,7 +297,12 @@ def register_mcp_tools(
             external,
             "web_search",
             "search",
-            "Search DuckDuckGo for current web sources.",
+            "Search DuckDuckGo for current web sources. Use the user's own words "
+            "as the query: do not add model names, versions, product lines, or "
+            "years that the user did not mention, and never offer alternative "
+            "guesses inside one query (no 'X or Y or Z'). For a question naming "
+            "several subjects, call web_search once per subject with a short "
+            "query for each.",
             {
                 "type": "object",
                 "properties": {

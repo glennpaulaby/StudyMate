@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+﻿from datetime import date
+from pathlib import Path
 from typing import List, Optional
 from study_agent.core.types import ChatMessage, Role, ToolCall
 
@@ -28,8 +29,12 @@ class ContextManager:
         self._init_system_prompt()
 
     def _render_system_message(self) -> ChatMessage:
-        """Builds the single leading SYSTEM message (base prompt + injected note)."""
+        """Builds the single leading SYSTEM message (base prompt + date + injected note)."""
         content = self._base_system
+        # Anchor the model to the real current date. Without it, small models
+        # answer "latest release" questions from stale training data and bake
+        # obsolete year/version guesses into their web-search queries.
+        content = f"{content}\n\nCurrent date: {date.today().isoformat()}"
         if self._injected_note:
             content = f"{content}\n\n---\n{self._injected_note}"
         return ChatMessage(role=Role.SYSTEM, content=content)

@@ -118,7 +118,7 @@ def test_child_agent_context_isolation():
 
     # Verify parent context is completely untouched by child engine execution
     assert len(parent_context.get_messages()) == initial_parent_message_count
-    assert parent_context.get_messages()[0].content == "Parent system prompt."
+    assert parent_context.get_messages()[0].content.startswith("Parent system prompt.")
     assert parent_context.get_messages()[1].content == "Hello from parent conversation."
     assert parent_context.get_messages()[2].content == "Hello! I am your main assistant."
 

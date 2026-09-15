@@ -667,33 +667,47 @@ def print_config(config: AppConfig) -> None:
     console.print(table)
 
 
-def make_confirmation_handler(registry: ToolRegistry):
+def make_confirmation_handler(registry: ToolRegistry, spinner_ref: Optional[dict] = None):
     """
     Builds the interactive yes/no/always confirmation prompt used by the
     permission gate when a tool call requires user confirmation.
     Fails closed (returns False) on non-interactive stdin or interrupted input.
+
+    ``spinner_ref`` is an optional ``{"live": RichLive}`` holder: the handler
+    runs inside the agent loop's ``console.status()`` spinner, whose Live
+    refresh thread repaints the bottom of the terminal and ERASES the
+    confirmation prompt line, leaving an invisible prompt (agent looks frozen).
+    When given, the spinner is paused for the duration of the prompt.
     """
 
     def handler(name: str, arguments: dict, rule_desc: str) -> bool:
         if not (sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()):
             return False
-        args_preview = escape(str(arguments))
-        if len(args_preview) > 200:
-            args_preview = args_preview[:200] + "…"
-        console.print(Panel(
-            f"[bold]{escape(name)}[/bold] requires confirmation [dim]({escape(rule_desc)})[/dim]\n"
-            f"[dim]{args_preview}[/dim]",
-            title="🔐 Permission check",
-            border_style="yellow",
-        ))
+        live = spinner_ref.get("live") if spinner_ref else None
+        paused = live is not None and live.is_started
+        if paused:
+            live.stop()
         try:
-            answer = console.input(
-                "[bold yellow]Allow this tool call? [green]y[/green]/"
-                "[red]n[/red]/[cyan]always[/cyan] [/bold yellow]"
-            ).strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            console.print()
-            return False
+            args_preview = escape(str(arguments))
+            if len(args_preview) > 200:
+                args_preview = args_preview[:200] + "…"
+            console.print(Panel(
+                f"[bold]{escape(name)}[/bold] requires confirmation [dim]({escape(rule_desc)})[/dim]\n"
+                f"[dim]{args_preview}[/dim]",
+                title="🔐 Permission check",
+                border_style="yellow",
+            ))
+            try:
+                answer = console.input(
+                    "[bold yellow]Allow this tool call? [green]y[/green]/"
+                    "[red]n[/red]/[cyan]always[/cyan] [/bold yellow]"
+                ).strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                console.print()
+                return False
+        finally:
+            if paused:
+                live.start()
         if answer in ("a", "always"):
             if registry.policy is not None:
                 registry.policy.allow_for_session(name)
@@ -746,8 +760,11 @@ def run_cli(
     registry = tool_registry or ToolRegistry(
         policy=policy_from_config(app_config.permissions),
     )
+    # Shared holder so the confirmation handler can pause the thinking spinner
+    # (its Live repaint erases the y/n prompt line; see make_confirmation_handler).
+    spinner_ref: dict = {}
     if tool_registry is None and registry.policy is not None:
-        registry.confirmation_handler = make_confirmation_handler(registry)
+        registry.confirmation_handler = make_confirmation_handler(registry, spinner_ref)
 
         def _log_permission_event(event: PermissionEvent) -> None:
             logger.info(
@@ -1098,16 +1115,23 @@ def run_cli(
             pre_len = len(context.get_messages())
 
             # Run ReAct Loop with animated status
-            with console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots"):
-                try:
-                    result = engine.run(
-                        user_message=user_input,
-                        context=context,
-                        on_tool_start=on_tool_start
-                    )
-                except Exception as e:
-                    console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
-                    continue
+            thinking = console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots")
+            # The inner rich.live.Live (Status itself lacks is_started); the
+            # confirmation handler pauses/resumes it so the y/n line stays visible.
+            spinner_ref["live"] = thinking._live
+            try:
+                with thinking:
+                    try:
+                        result = engine.run(
+                            user_message=user_input,
+                            context=context,
+                            on_tool_start=on_tool_start
+                        )
+                    except Exception as e:
+                        console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
+                        continue
+            finally:
+                spinner_ref.pop("live", None)
 
             if memory_store is not None and active_thread_id is not None:
                 try:

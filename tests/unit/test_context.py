@@ -13,14 +13,17 @@ def test_context_initialization_with_default():
 
 
 def test_context_loading_from_soul_file(tmp_path: Path):
-    """Verify loading custom persona instructions from file."""
+    """Verify loading custom persona instructions from file (plus the date anchor)."""
+    from datetime import date
+
     soul_file = tmp_path / "soul.md"
     soul_file.write_text("Custom Study Persona Prompt", encoding="utf-8")
-    
+
     ctx = ContextManager(system_prompt_path=soul_file)
     msgs = ctx.get_messages()
     assert len(msgs) == 1
-    assert msgs[0].content == "Custom Study Persona Prompt"
+    assert msgs[0].content.startswith("Custom Study Persona Prompt")
+    assert f"Current date: {date.today().isoformat()}" in msgs[0].content
 
 
 def test_multi_turn_history_accumulation():

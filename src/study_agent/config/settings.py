@@ -37,15 +37,12 @@ class MCPToolConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether MCP-backed tools are registered")
     vault_path: str = Field(default="./workspace/", description="Obsidian vault path")
     search_command: str = Field(
-        default="uvx",
-        description="Executable used to start the external web-search MCP server",
+        default="duckduckgo-mcp-server",
+        description="Executable that starts the external web-search MCP server "
+        "(installed on PATH: /opt/mcp/ddg/bin in the image, uv tool install on a host)",
     )
     search_args: List[str] = Field(
-        default_factory=lambda: [
-            "--with",
-            "duckduckgo-mcp-server[browser]",
-            "duckduckgo-mcp-server",
-        ],
+        default_factory=list,
         description="Arguments for the external web-search MCP server",
     )
 
