@@ -77,6 +77,13 @@ def load_config(
         _obs.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
     if os.getenv("LANGFUSE_HOST", "") != "":
         _obs.langfuse_host = os.getenv("LANGFUSE_HOST", "").strip()
+    if os.getenv("STUDYMATE_HEALTH_ENABLED", "") != "":
+        _obs.health_enabled = os.getenv("STUDYMATE_HEALTH_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.getenv("STUDYMATE_HEALTH_INTERVAL_SECONDS", "") != "":
+        try:
+            _obs.health_interval_seconds = float(os.getenv("STUDYMATE_HEALTH_INTERVAL_SECONDS", ""))
+        except ValueError:
+            pass
     # Secrets: env-only, never from YAML (mirrors the LLM API-key pattern).
     if os.getenv("LANGFUSE_PUBLIC_KEY", "") != "":
         _obs.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()

@@ -98,6 +98,10 @@ class ObservabilityConfig(BaseModel):
     langfuse_host: str = Field(default="http://localhost:3000", description="Self-hosted Langfuse base URL")
     langfuse_public_key: str = Field(default="", description="Langfuse project public key (secret, env-only)")
     langfuse_secret_key: str = Field(default="", description="Langfuse project secret key (secret, env-only)")
+    health_enabled: bool = Field(default=False, description="Periodic MCP health heartbeat switch")
+    health_interval_seconds: float = Field(
+        default=60.0, ge=5.0, description="Seconds between MCP health probes"
+    )
 
 
 class AppConfig(BaseModel):

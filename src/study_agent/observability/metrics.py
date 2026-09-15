@@ -129,6 +129,17 @@ def init_metrics(enabled: bool, host: str = "127.0.0.1", port: int = 8000) -> bo
                 "Sub-agent runs by config and status.",
                 ["config", "status"],
             )
+            # Additive health series (existing names above stay frozen).
+            _metrics["mcp_up"] = Gauge(
+                f"{PREFIX}_mcp_up",
+                "MCP server liveness from the periodic heartbeat (1 = reachable, 0 = down).",
+                ["server"],
+            )
+            _metrics["mcp_probe_duration"] = Gauge(
+                f"{PREFIX}_mcp_probe_duration_seconds",
+                "Last MCP health probe duration in seconds.",
+                ["server"],
+            )
         if not _server_started:
             assert start_http_server is not None
             start_http_server(port, addr=host)
@@ -246,3 +257,13 @@ def observe_subagent(config: str, status: str) -> None:
     if runs is None:
         return
     runs.labels(config=config, status=status).inc()  # type: ignore[union-attr]
+
+
+def observe_mcp_health(server: str, ok: bool, duration_s: float = 0.0) -> None:
+    """Records one heartbeat tick per MCP server (liveness + probe latency)."""
+    up = _get("mcp_up")
+    duration = _get("mcp_probe_duration")
+    if up is None or duration is None:
+        return
+    up.labels(server=server).set(1.0 if ok else 0.0)  # type: ignore[union-attr]
+    duration.labels(server=server).set(max(0.0, duration_s))  # type: ignore[union-attr]

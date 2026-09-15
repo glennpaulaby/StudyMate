@@ -397,6 +397,17 @@ def _emit_child_observations(
     turns = event.get("turns", [])
     if not isinstance(turns, list):
         return
+    records = event.get("tools", [])
+    if not isinstance(records, list):
+        records = []
+    emitted: set = set()
+
+    def _record_for(name: Any) -> Dict[str, Any]:
+        """First matching run-level tool record (carries source/server)."""
+        for record in records:
+            if isinstance(record, dict) and record.get("name") == name:
+                return record
+        return {}
     for turn in turns:
         if not isinstance(turn, dict):
             continue
@@ -440,14 +451,22 @@ def _emit_child_observations(
                         if isinstance(call, dict) and call.get("name") == tool.get("name"):
                             args = call.get("arguments", "")
                             break
+                record = _record_for(tool.get("name"))
                 child = gen.start_observation(
                     name=str(tool.get("name", "tool")),
                     as_type="tool",
                     input=truncate_args(args, max_chars),
                     output=truncate_text(str(tool.get("observation", "")), max_chars),
-                    metadata={"turn": turn.get("n")},
+                    metadata={
+                        "turn": turn.get("n"),
+                        "status": record.get("status", ""),
+                        "source": record.get("source", ""),
+                        "server": record.get("server", ""),
+                    },
+                    level="ERROR" if record.get("status") == "error" else "DEFAULT",
                 )
                 child.end()
+                emitted.add(str(tool.get("name", "")))
             except Exception as e:
                 logger.debug(f"Langfuse tool child skipped: {e}")
                 continue
@@ -455,6 +474,37 @@ def _emit_child_observations(
             gen.end()
         except Exception as e:
             logger.debug(f"Langfuse generation end skipped: {e}")
+    # Run-level records with no per-turn counterpart (e.g. heartbeat ticks,
+    # which have tools but no LLM turns) become direct tool children of the
+    # root span, so status widgets see them without a generation parent.
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = str(record.get("name", "") or "")
+        if not name or name in emitted:
+            continue
+        try:
+            args = record.get("arguments", "")
+            detail = ""
+            if isinstance(args, dict):
+                detail = str(args.get("detail", ""))
+            child = parent.start_observation(
+                name=name,
+                as_type="tool",
+                input=truncate_args(args, max_chars),
+                output=truncate_text(detail, max_chars),
+                metadata={
+                    "status": record.get("status", ""),
+                    "source": record.get("source", ""),
+                    "server": record.get("server", ""),
+                    "duration_ms": record.get("duration_ms", 0),
+                },
+                level="ERROR" if record.get("status") == "error" else "DEFAULT",
+            )
+            child.end()
+        except Exception as e:
+            logger.debug(f"Langfuse record child skipped: {e}")
+            continue
 
 
 def start_langfuse_run(

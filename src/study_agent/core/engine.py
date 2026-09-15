@@ -522,13 +522,25 @@ class AgentEngine:
                     on_tool_start(tool_call)
 
                 tool_start = time.perf_counter()
+                registered = self.tool_registry.get(tool_call.name) if self.tool_registry else None
+                tool_source_name = tool_source(registered) if registered is not None else "builtin"
+                # Server label for MCP health widgets: the external bridge
+                # (duck-typed via remote_name, no tools.mcp import in core)
+                # vs the local vault tools vs non-MCP tools.
+                remote_name = getattr(registered, "remote_name", None)
+                if isinstance(remote_name, str) and remote_name:
+                    tool_server = "external-mcp"
+                elif tool_source_name == "mcp":
+                    tool_server = "local-mcp"
+                else:
+                    tool_server = ""
                 tool_span = None
                 if live_handle is not None:
                     tool_span = start_langfuse_tool(
                         live_handle["span"],
                         name=tool_call.name,
                         input=truncate_args(tool_call.arguments, max_chars),
-                        metadata={"turn": iterations},
+                        metadata={"turn": iterations, "source": tool_source_name, "server": tool_server},
                     )
                 observation = self.tool_registry.execute(
                     name=tool_call.name,
@@ -543,15 +555,17 @@ class AgentEngine:
                         "turn": iterations,
                         "status": tool_status,
                         "duration_ms": round(tool_duration_ms, 2),
+                        "source": tool_source_name,
+                        "server": tool_server,
                     },
                     level="ERROR" if tool_status == "error" else "DEFAULT",
                     status_message=truncate_text(observation, 500) if tool_status == "error" else None,
                 )
-                registered = self.tool_registry.get(tool_call.name) if self.tool_registry else None
                 tool_records.append(
                     {
                         "name": tool_call.name,
-                        "source": tool_source(registered) if registered is not None else "builtin",
+                        "source": tool_source_name,
+                        "server": tool_server,
                         "duration_ms": round(tool_duration_ms, 2),
                         "status": "error" if observation.startswith("Error") else "ok",
                         "arguments": truncate_args(tool_call.arguments, max_chars),

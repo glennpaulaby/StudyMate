@@ -737,6 +737,52 @@ def run_cli(
                 ),
             )
 
+    # MCP health heartbeat: periodic probes fanning out to Prometheus
+    # gauges + Langfuse heartbeat traces (mcp-health:* observations).
+    if obs_cfg.health_enabled and app_config.tools.mcp.enabled:
+        from functools import partial
+
+        from study_agent.observability.health import (
+            HealthHeartbeat,
+            build_heartbeat_event,
+            probe_external_bridge,
+            probe_obsidian_vault,
+        )
+        from study_agent.observability.tracing import export_langfuse_async as _export_hb
+
+        hb_vault = Path(app_config.tools.mcp.vault_path)
+        if not hb_vault.is_absolute():
+            hb_vault = (project_root / hb_vault).resolve()
+        hb_probes = [
+            partial(
+                probe_external_bridge,
+                command=app_config.tools.mcp.search_command,
+                args=list(app_config.tools.mcp.search_args),
+            ),
+            partial(probe_obsidian_vault, hb_vault),
+        ]
+
+        def _on_health(results) -> None:
+            event = build_heartbeat_event(results)
+            append_trace(obs_cfg.trace_file, event)
+            if obs_cfg.langfuse_enabled:
+                _export_hb(
+                    event,
+                    host=obs_cfg.langfuse_host,
+                    public_key=obs_cfg.langfuse_public_key,
+                    secret_key=obs_cfg.langfuse_secret_key,
+                )
+
+        HealthHeartbeat(
+            hb_probes,
+            interval_s=obs_cfg.health_interval_seconds,
+            on_result=_on_health,
+        ).start()
+        console.print(
+            "[dim]MCP health heartbeat on "
+            f"(every {obs_cfg.health_interval_seconds:g}s → Prometheus + Langfuse).[/dim]"
+        )
+
     engine = AgentEngine(
         llm_client=client,
         tool_registry=registry,

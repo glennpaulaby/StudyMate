@@ -539,6 +539,7 @@ def test_export_emits_generation_and_tool_children(monkeypatch):
         model_parameters={"temperature": 0.2},
         available_tools=["echo_tool"],
         messages=[{"role": "system", "content": "SYS"}],
+        tools=[{"name": "echo_tool", "source": "builtin", "server": "", "status": "ok"}],
         turns=[
             {
                 "n": 1,
@@ -568,6 +569,10 @@ def test_export_emits_generation_and_tool_children(monkeypatch):
     assert tool["name"] == "echo_tool"
     assert tool["as_type"] == "tool"
     assert tool["output"] == "echoed"
+    assert tool["metadata"]["source"] == "builtin"
+    assert tool["metadata"]["status"] == "ok"
+    # Same-name run record must not duplicate the per-turn child.
+    assert len(calls["children"]) == 2
     assert calls["observation"]["output"]["messages"] == [{"role": "system", "content": "SYS"}]
     assert calls["flushed"] is True
 
@@ -673,6 +678,70 @@ def test_abort_langfuse_run_closes_span(monkeypatch):
     assert tracing.finish_langfuse_run(None, {}) is False
 
 
+def test_export_emits_record_children_without_turns(monkeypatch):
+    """Verify run-level tool records (e.g. heartbeats) become root children."""
+    calls: Dict[str, Any] = {}
+    _install_fake_langfuse(monkeypatch, calls)
+
+    event = tracing.build_run_event(
+        model="",
+        status="success",
+        run_id="r9",
+        thread_id="mcp-health",
+        thread_name="mcp-health",
+        final_response="MCP health: 1/1 servers live",
+        tools=[
+            {
+                "name": "mcp-health:duckduckgo-bridge",
+                "source": "mcp",
+                "server": "external-mcp",
+                "status": "ok",
+                "duration_ms": 5.0,
+                "arguments": {"detail": "3 remote tools"},
+            }
+        ],
+        turns=[],
+    )
+    assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is True
+    assert len(calls["children"]) == 1
+    child = calls["children"][0]
+    assert child["as_type"] == "tool"
+    assert child["name"] == "mcp-health:duckduckgo-bridge"
+    assert child["metadata"]["server"] == "external-mcp"
+    assert child["output"] == "3 remote tools"
+    assert child["level"] == "DEFAULT"
+
+
+def test_export_failed_records_end_as_error(monkeypatch):
+    """Verify a DOWN server's heartbeat child is ERROR level, not DEFAULT."""
+    calls: Dict[str, Any] = {}
+    _install_fake_langfuse(monkeypatch, calls)
+
+    event = tracing.build_run_event(
+        model="",
+        status="error",
+        run_id="r8",
+        thread_id="mcp-health",
+        thread_name="mcp-health",
+        final_response="MCP health: 0/1 servers live",
+        tools=[
+            {
+                "name": "mcp-health:obsidian-vault",
+                "source": "mcp",
+                "server": "local-mcp",
+                "status": "error",
+                "duration_ms": 1.0,
+                "arguments": {"detail": "ValueError: gone"},
+            }
+        ],
+        turns=[],
+        error="obsidian-vault: ValueError: gone",
+    )
+    assert tracing.export_langfuse(event, host="h", public_key="p", secret_key="s") is True
+    assert len(calls["children"]) == 1
+    assert calls["children"][0]["level"] == "ERROR"
+
+
 def test_trace_tags_degrade_silently():
     """Verify tag stamping never raises on odd spans/events."""
     tracing._set_trace_tags(None, ["success"])
@@ -723,7 +792,11 @@ def test_engine_live_langfuse_spans_per_turn(tmp_path, enabled_metrics, monkeypa
         "start_langfuse_tool",
         lambda parent, **kw: calls["tools"].append(kw) or {"tool": kw},
     )
-    monkeypatch.setattr(engine_mod, "finish_langfuse_tool", lambda span, **kw: None)
+    monkeypatch.setattr(
+        engine_mod,
+        "finish_langfuse_tool",
+        lambda span, **kw: calls.setdefault("tool_finished", []).append(kw),
+    )
     monkeypatch.setattr(
         engine_mod,
         "finish_langfuse_run",
@@ -799,6 +872,9 @@ def test_engine_live_langfuse_spans_per_turn(tmp_path, enabled_metrics, monkeypa
     assert event["turns"][0]["llm"]["reasoning_content"] == "thinking-1"
     assert event["turns"][0]["llm"]["latency_s"] >= 0.0
     assert event["available_tools"] == ["echo_tool"]
+    assert calls["tool_finished"][0]["metadata"]["source"] == "builtin"
+    assert calls["tool_finished"][0]["metadata"]["server"] == ""
+    assert event["tools"][0]["server"] == ""
 
 
 def test_engine_error_aborts_live_span(tmp_path, enabled_metrics, monkeypatch):
@@ -832,3 +908,91 @@ def test_engine_error_aborts_live_span(tmp_path, enabled_metrics, monkeypatch):
         engine.run("boom", ContextManager())
     assert calls["aborted"] == ["slow"]
     assert calls["fallback"] == []
+
+
+def test_engine_tool_server_labels(tmp_path, enabled_metrics, monkeypatch):
+    """Verify tool spans carry source + server for MCP health widgets."""
+    import study_agent.core.engine as engine_mod
+
+    calls: Dict[str, Any] = {"finished": []}
+    monkeypatch.setattr(engine_mod, "start_langfuse_run", lambda **kw: {"span": "root"})
+    monkeypatch.setattr(engine_mod, "start_langfuse_generation", lambda handle, **kw: {"gen": 1})
+    monkeypatch.setattr(engine_mod, "finish_langfuse_generation", lambda span, **kw: None)
+    monkeypatch.setattr(engine_mod, "start_langfuse_tool", lambda parent, **kw: {"tool": 1})
+    monkeypatch.setattr(
+        engine_mod,
+        "finish_langfuse_tool",
+        lambda span, **kw: calls.setdefault("tool_finished", []).append(kw),
+    )
+    monkeypatch.setattr(
+        engine_mod, "finish_langfuse_run", lambda handle, event: calls["finished"].append(event)
+    )
+
+    class _BridgeTool(BaseTool):
+        """Mimics ExternalMCPTool (remote_name, mcp module) without the import."""
+
+        remote_name = "search"
+
+        @property
+        def name(self) -> str:
+            return "web_search"
+
+        @property
+        def description(self) -> str:
+            return "Search."
+
+        @property
+        def parameters(self) -> Dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        def execute(self, **kwargs: Any) -> str:
+            return "hits"
+
+    _BridgeTool.__module__ = "study_agent.tools.mcp.tools"
+
+    class _VaultTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "obsidian_list_notes"
+
+        @property
+        def description(self) -> str:
+            return "List."
+
+        @property
+        def parameters(self) -> Dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        def execute(self, **kwargs: Any) -> str:
+            return "notes"
+
+    _VaultTool.__module__ = "study_agent.tools.mcp.tools"
+
+    registry = ToolRegistry()
+    registry.register(_BridgeTool())
+    registry.register(_VaultTool())
+    llm = MockLLMClient()
+    llm.add_response(
+        content="", tool_calls=[ToolCall(id="c1", name="web_search", arguments={})]
+    )
+    llm.add_response(
+        content="", tool_calls=[ToolCall(id="c2", name="obsidian_list_notes", arguments={})]
+    )
+    llm.add_response(content="done")
+    trace_file = tmp_path / "traces.jsonl"
+    obs = ObservabilityConfig(
+        metrics_enabled=True, langfuse_enabled=True, trace_file=str(trace_file)
+    )
+    engine = AgentEngine(llm_client=llm, tool_registry=registry, observability=obs)
+
+    assert engine.run("search stuff", ContextManager()).is_success is True
+    finished = calls["tool_finished"]
+    assert [(f["metadata"] or {}).get("server") for f in finished] == [
+        "external-mcp",
+        "local-mcp",
+    ]
+    assert {(f["metadata"] or {}).get("source") for f in finished} == {"mcp"}
+    assert [t["server"] for t in calls["finished"][0]["tools"]] == [
+        "external-mcp",
+        "local-mcp",
+    ]
