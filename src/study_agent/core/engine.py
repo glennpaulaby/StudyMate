@@ -105,6 +105,21 @@ class AgentEngine:
                     names.append(str(name))
         return names
 
+    @staticmethod
+    def _system_prompt(messages: Optional[List[Any]]) -> str:
+        """Leading SYSTEM content (persona + injected facts/procedures).
+
+        This is the exact instruction block handed to the model on every
+        call. Empty when the context carries no usable system message.
+        """
+        for message in messages or []:
+            role = getattr(message, "role", "")
+            role = getattr(role, "value", role)
+            content = getattr(message, "content", "") or ""
+            if str(role or "") == "system" and isinstance(content, str) and content.strip():
+                return content
+        return ""
+
     def _finish(
         self,
         *,
@@ -238,10 +253,15 @@ class AgentEngine:
         schemas = self.tool_registry.list_schemas() if self.tool_registry else None
         model_parameters = self._llm_params()
         tool_names = self._tool_names(schemas)
+        # Cursor over context history: each generation child reports only the
+        # entries added since the previous LLM call (see per-turn block).
+        sent_len = 0
 
         # Live Langfuse root span: opened now so the UI Latency column
-        # measures the real run. None when exporting is unavailable —
-        # per-turn helpers and _finish degrade to the post-hoc fallback.
+        # measures the real run. Root input captures the run's full starting
+        # request (system prompt incl. injected facts/procedures, tool
+        # schemas). None when exporting is unavailable — per-turn helpers
+        # and _finish degrade to the post-hoc fallback.
         live_handle: Optional[Dict[str, Any]] = None
         if self.observability.langfuse_enabled:
             try:
@@ -256,6 +276,11 @@ class AgentEngine:
                     user_message=user_message,
                     model_parameters=model_parameters,
                     available_tools=tool_names,
+                    system_prompt=self._system_prompt(context.get_messages()),
+                    tool_schemas=schemas if isinstance(schemas, list) else [],
+                    tool_choice="auto" if schemas else "none",
+                    injected_memory=context.injected_note or "",
+                    max_chars=max_chars,
                 )
             except Exception as e:
                 logger.debug(f"Live Langfuse span skipped: {e}")
@@ -284,6 +309,23 @@ class AgentEngine:
 
             # 1. Reason: Request completion from LLM with available tools
             llm_start = time.perf_counter()
+            # Model-input delta: entries added since the previous call. Each
+            # call's input = previous input + delta, so the generation chain
+            # reconstructs the full request with zero duplication. Compaction
+            # may replace history (length shrinks) — then ship the snapshot.
+            try:
+                history = context.get_messages()
+                if len(history) < sent_len:
+                    compacted = True
+                    new_messages = [m.to_dict() for m in history]
+                else:
+                    compacted = False
+                    new_messages = [m.to_dict() for m in history[sent_len:]]
+                sent_len = len(history)
+            except Exception as e:
+                logger.debug(f"Model-input delta snapshot skipped: {e}")
+                compacted = False
+                new_messages = []
             gen_span = None
             if live_handle is not None:
                 gen_span = start_langfuse_generation(
@@ -291,6 +333,8 @@ class AgentEngine:
                     name=f"llm-turn-{iterations}",
                     turn=iterations,
                     available_tools=tool_names,
+                    new_messages=new_messages,
+                    compacted=compacted,
                 )
             try:
                 response = self.llm_client.chat(

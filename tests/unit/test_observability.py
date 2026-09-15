@@ -11,6 +11,7 @@ import re
 import sys
 import types
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import pytest
@@ -394,6 +395,41 @@ def test_engine_trace_carries_thread_messages_and_turns(tmp_path, enabled_metric
     assert event["duration_s"] >= 0.0
 
 
+def test_truncate_messages_bounds_payload():
+    """Verify per-message contents truncate with markers; shapes survive."""
+    messages = [
+        {"role": "system", "content": "s" * 5000},
+        {"role": "user", "content": "short"},
+        {"role": "tool", "content": None},
+        "not-a-dict",
+    ]
+    truncated = tracing.truncate_messages(messages, 100)
+    assert truncated[0]["content"].endswith("…[truncated 4900 chars]")
+    assert truncated[0]["role"] == "system"
+    assert truncated[1]["content"] == "short"
+    assert truncated[2]["content"] is None
+    assert truncated[3] == "not-a-dict"
+    assert tracing.truncate_messages(messages, 0)[0]["content"] == "s" * 5000
+    assert tracing.truncate_messages("nope", 10) == "nope"
+    assert tracing.truncate_messages(None, 10) is None
+
+
+def test_engine_system_prompt_extraction():
+    """Verify the leading SYSTEM block is found across role shapes."""
+    from study_agent.core.types import Role
+
+    sys_msg = SimpleNamespace(role=Role.SYSTEM, content="  persona  ")
+    user_msg = SimpleNamespace(role=Role.USER, content="hi")
+    assert AgentEngine._system_prompt([sys_msg, user_msg]) == "  persona  "
+    str_msg = SimpleNamespace(role="system", content="plain")
+    assert AgentEngine._system_prompt([str_msg]) == "plain"
+    assert AgentEngine._system_prompt([user_msg]) == ""
+    assert AgentEngine._system_prompt([]) == ""
+    assert AgentEngine._system_prompt(None) == ""
+    blank = SimpleNamespace(role=Role.SYSTEM, content="   ")
+    assert AgentEngine._system_prompt([blank]) == ""
+
+
 def test_usage_details_mapping():
     """Verify token counts map onto input/output/total without double-billing."""
     assert tracing.build_usage_details(10, 20, 30) == {"input": 10, "output": 20, "total": 30}
@@ -429,12 +465,23 @@ class _FakeCM:
         return False
 
 
+class _FakeOtelSpan:
+    """Stands in for the wrapped OTel span (records attribute stamps)."""
+
+    def __init__(self, calls: Dict[str, Any]) -> None:
+        self._calls = calls
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self._calls.setdefault("span_attrs", []).append((key, value))
+
+
 class _FakeChild:
     """Stands in for Langfuse observation wrappers (span/agent/generation/tool)."""
 
     def __init__(self, calls: Dict[str, Any], kwargs: Dict[str, Any], record: bool = True) -> None:
         self._calls = calls
         self.kwargs = kwargs
+        self._otel_span = _FakeOtelSpan(calls)
         if record:
             calls.setdefault("children", []).append(kwargs)
 
@@ -469,6 +516,7 @@ def _install_fake_langfuse(monkeypatch, calls: Dict[str, Any]) -> None:
     fake_module = types.ModuleType("langfuse")
     fake_module.Langfuse = lambda **kwargs: _FakeLangfuseClient(calls, **kwargs)  # type: ignore[attr-defined]
     fake_module.propagate_attributes = lambda **kwargs: _FakeCM(calls, kwargs)  # type: ignore[attr-defined]
+    fake_module.LangfuseOtelSpanAttributes = SimpleNamespace(TRACE_TAGS="langfuse.trace.tags")  # type: ignore[attr-defined]
     fake_types = types.ModuleType("langfuse.types")
     fake_types.TraceContext = lambda **kwargs: kwargs  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "langfuse", fake_module)
@@ -490,6 +538,7 @@ def test_export_emits_generation_and_tool_children(monkeypatch):
         duration_s=2.0,
         model_parameters={"temperature": 0.2},
         available_tools=["echo_tool"],
+        messages=[{"role": "system", "content": "SYS"}],
         turns=[
             {
                 "n": 1,
@@ -519,6 +568,7 @@ def test_export_emits_generation_and_tool_children(monkeypatch):
     assert tool["name"] == "echo_tool"
     assert tool["as_type"] == "tool"
     assert tool["output"] == "echoed"
+    assert calls["observation"]["output"]["messages"] == [{"role": "system", "content": "SYS"}]
     assert calls["flushed"] is True
 
 
@@ -538,13 +588,31 @@ def test_live_run_span_lifecycle(monkeypatch):
         user_message="hello",
         model_parameters={"temperature": 0.2},
         available_tools=["echo_tool"],
+        system_prompt="SYS PROMPT",
+        tool_schemas=[{"type": "function"}],
+        tool_choice="auto",
+        injected_memory="FACTS BLOCK",
+        max_chars=50,
     )
     assert handle is not None
+    assert handle["max_chars"] == 50
     assert calls["propagate"]["session_id"] == "tid"
     assert calls["propagate"]["tags"] == ["tn"]
+    root_input = calls["observation"]
+    assert root_input["input"]["system_prompt"] == "SYS PROMPT"
+    assert root_input["input"]["tool_schemas"] == [{"type": "function"}]
+    assert root_input["input"]["tool_choice"] == "auto"
+    assert root_input["input"]["injected_memory"] == "FACTS BLOCK"
 
     gen = tracing.start_langfuse_generation(
-        handle, name="llm-turn-1", turn=1, available_tools=["echo_tool"]
+        handle,
+        name="llm-turn-1",
+        turn=1,
+        available_tools=["echo_tool"],
+        new_messages=[
+            {"role": "system", "content": "s" * 100},
+            {"role": "user", "content": "hi"},
+        ],
     )
     assert gen is not None
     finish_time = datetime.now(timezone.utc)
@@ -561,6 +629,10 @@ def test_live_run_span_lifecycle(monkeypatch):
     assert child["updated"]["model"] == "live-model"
     assert child["updated"]["usage_details"] == {"input": 5, "output": 7, "total": 12}
     assert child["updated"]["completion_start_time"] is finish_time
+    delta = child["input"]["new_messages"]
+    assert [m["role"] for m in delta] == ["system", "user"]
+    assert delta[0]["content"].endswith("…[truncated 50 chars]")
+    assert child["input"]["compacted"] is False
 
     tool = tracing.start_langfuse_tool(handle["span"], name="echo_tool", input={})
     tracing.finish_langfuse_tool(tool, output="echoed", metadata={"status": "ok"})
@@ -568,11 +640,18 @@ def test_live_run_span_lifecycle(monkeypatch):
 
     event = tracing.build_run_event(
         model="live-model", status="success", run_id="a" * 32,
+        thread_id="tid", thread_name="tn",
         duration_s=1.25, final_response="hi",
+        messages=[{"role": "system", "content": "m" * 100}],
     )
     assert tracing.finish_langfuse_run(handle, event) is True
     assert calls["observation"]["updated"]["name"] == "studymate-run:success (1.2s)"
     assert calls["observation"]["updated"]["output"]["final_response"] == "hi"
+    assert calls["observation"]["updated"]["output"]["status"] == "success"
+    assert ("langfuse.trace.tags", ["tn", "success"]) in calls["span_attrs"]
+    assert calls["observation"]["updated"]["output"]["messages"][0]["content"].endswith(
+        "…[truncated 50 chars]"
+    )
     assert calls["propagate_exited"] is True
     assert calls["flushed"] is True
 
@@ -585,11 +664,26 @@ def test_abort_langfuse_run_closes_span(monkeypatch):
     handle = tracing.start_langfuse_run(
         host="h", public_key="p", secret_key="s", run_id="b" * 32, model="m"
     )
+    assert calls["observation"]["input"]["injected_memory"] == ""
     assert tracing.abort_langfuse_run(handle, "boom") is True
     assert calls["observation"]["updated"]["name"] == "studymate-run:error (0.0s)"
+    assert ("langfuse.trace.tags", ["error"]) in calls["span_attrs"]
     assert calls["observation"]["updated"]["level"] == "ERROR"
     assert tracing.abort_langfuse_run(None, "x") is False
     assert tracing.finish_langfuse_run(None, {}) is False
+
+
+def test_trace_tags_degrade_silently():
+    """Verify tag stamping never raises on odd spans/events."""
+    tracing._set_trace_tags(None, ["success"])
+    tracing._set_trace_tags(object(), ["success"])
+    tracing._set_trace_tags(SimpleNamespace(), [])
+    assert tracing._run_tags({}) == []
+    assert tracing._run_tags({"status": "max_iterations"}) == ["max_iterations"]
+    assert tracing._run_tags({"status": "success", "thread": {"id": "t", "name": "tn"}}) == [
+        "tn",
+        "success",
+    ]
 
 
 def test_start_langfuse_run_none_without_backend(monkeypatch):
@@ -608,9 +702,12 @@ def test_engine_live_langfuse_spans_per_turn(tmp_path, enabled_metrics, monkeypa
     import study_agent.core.engine as engine_mod
 
     calls: Dict[str, Any] = {"generations": [], "tools": [], "finished": [], "fallback": []}
-    monkeypatch.setattr(
-        engine_mod, "start_langfuse_run", lambda **kw: {"span": "root", "params": kw}
-    )
+
+    def _fake_start(**kw: Any) -> Dict[str, Any]:
+        calls["started"] = kw
+        return {"span": "root", "params": kw}
+
+    monkeypatch.setattr(engine_mod, "start_langfuse_run", _fake_start)
     monkeypatch.setattr(
         engine_mod,
         "start_langfuse_generation",
@@ -670,9 +767,12 @@ def test_engine_live_langfuse_spans_per_turn(tmp_path, enabled_metrics, monkeypa
     )
     engine = AgentEngine(llm_client=llm, tool_registry=registry, observability=obs)
 
-    result = engine.run("do the thing", ContextManager(), thread_id="t1", thread_name="tn")
+    ctx = ContextManager()
+    ctx.inject_system_note("MEMO")
+    result = engine.run("do the thing", ctx, thread_id="t1", thread_name="tn")
 
     assert result.is_success is True
+    assert calls["started"]["injected_memory"] == "MEMO"
     assert len(calls["generations"]) == 2
     assert len(calls["tools"]) == 1
     assert len(calls["gen_finished"]) == 2
@@ -680,6 +780,21 @@ def test_engine_live_langfuse_spans_per_turn(tmp_path, enabled_metrics, monkeypa
     assert calls["gen_finished"][0]["completion_start_time"] is not None
     assert len(calls["finished"]) == 1
     assert calls["fallback"] == []
+    # Full starting request rides once on the root span …
+    start_params = calls.get("started", {})
+    assert isinstance(start_params.get("system_prompt"), str) and start_params["system_prompt"]
+    assert start_params["tool_choice"] == "auto"
+    assert any(
+        (s.get("function", {}) or {}).get("name") == "echo_tool"
+        for s in start_params.get("tool_schemas", [])
+        if isinstance(s, dict)
+    )
+    # … while each generation carries only its delta (no duplication).
+    first_delta = calls["generations"][0]["new_messages"]
+    assert [m["role"] for m in first_delta] == ["system", "user"]
+    second_delta = calls["generations"][1]["new_messages"]
+    assert [m["role"] for m in second_delta] == ["assistant", "tool"]
+    assert calls["generations"][0]["compacted"] is False
     event = calls["finished"][0]
     assert event["turns"][0]["llm"]["reasoning_content"] == "thinking-1"
     assert event["turns"][0]["llm"]["latency_s"] >= 0.0

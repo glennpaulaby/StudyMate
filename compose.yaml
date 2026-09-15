@@ -84,6 +84,17 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000} # CHANGEME: generate via `openssl rand -hex 32`
       TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      # Self-hosted Langfuse Assistant (in-app agent): one instance-wide model
+      # config shared by web+worker. Without LANGFUSE_IN_APP_AGENT_ENABLED the
+      # UI reports "in-app agent is not enabled on this instance".
+      # Example (InnKube): PROVIDER=openai MODEL=qwen-agentworld-35b-a3b
+      # API_KEY=<INNKUBE_API_KEY> BASE_URL=https://llms.innkube.fim.uni-passau.de/v1
+      LANGFUSE_AI_PROVIDER: ${LANGFUSE_AI_PROVIDER:-}
+      LANGFUSE_AI_MODEL: ${LANGFUSE_AI_MODEL:-}
+      LANGFUSE_AI_SMALL_MODEL: ${LANGFUSE_AI_SMALL_MODEL:-}
+      LANGFUSE_AI_API_KEY: ${LANGFUSE_AI_API_KEY:-}
+      LANGFUSE_AI_BASE_URL: ${LANGFUSE_AI_BASE_URL:-}
+      LANGFUSE_IN_APP_AGENT_ENABLED: ${LANGFUSE_IN_APP_AGENT_ENABLED:-false}
       LANGFUSE_MCP_BASE_URL: ${LANGFUSE_MCP_BASE_URL:-}
       LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST: ${LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST:-}
       LANGFUSE_LLM_CONNECTION_WHITELISTED_IPS: ${LANGFUSE_LLM_CONNECTION_WHITELISTED_IPS:-}
@@ -135,6 +146,10 @@ services:
     environment:
       <<: *langfuse-worker-env
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret} # CHANGEME
+      # Web-only: hostname the worker uses for MCP must be allow-listed here
+      # (it differs from NEXTAUTH_URL's localhost). Defaults to the compose
+      # service name; override only for non-compose deployments.
+      LANGFUSE_MCP_ALLOWED_HOSTS: ${LANGFUSE_MCP_ALLOWED_HOSTS:-langfuse-web}
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT:-http://localhost:9090}
       LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: ${LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT:-http://minio:9000}
       LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}

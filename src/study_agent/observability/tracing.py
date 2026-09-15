@@ -73,6 +73,30 @@ def truncate_args(arguments: Any, max_chars: int = DEFAULT_TRACE_MAX_CHARS) -> A
     return truncate_text(arguments, max_chars)
 
 
+def truncate_messages(messages: Any, max_chars: int = DEFAULT_TRACE_MAX_CHARS) -> Any:
+    """Truncates per-message content in a message list with markers.
+
+    Bounds Langfuse span payloads: a long context would otherwise ship in
+    full on every trace. Non-dict entries and non-string contents pass
+    through untouched; never raises (returns the input on any surprise).
+    """
+    if not isinstance(messages, list):
+        return messages
+    try:
+        truncated = []
+        for message in messages:
+            if not isinstance(message, dict):
+                truncated.append(message)
+                continue
+            copy = dict(message)
+            if isinstance(copy.get("content"), str):
+                copy["content"] = truncate_text(copy["content"], max_chars)
+            truncated.append(copy)
+        return truncated
+    except Exception:
+        return messages
+
+
 def build_run_event(
     *,
     model: str,
@@ -266,13 +290,72 @@ def _flush_async(client: Any) -> threading.Thread:
     return thread
 
 
-def _root_output(event: Dict[str, Any], duration_s: float) -> Dict[str, Any]:
-    """Shared agent-span output payload (full turns + true duration)."""
+def _run_tags(event: Dict[str, Any]) -> List[str]:
+    """Trace tags for a finished run: thread name + outcome status.
+
+    Tags (not the span name) are the queryable success/fail signal: the
+    Traces table's Trace Tags column shows e.g. `success` / `error` /
+    `max_iterations` / `empty` next to the thread name.
+    """
+    tags: List[str] = []
+    thread = event.get("thread", {})
+    name = thread.get("name") if isinstance(thread, dict) else ""
+    if isinstance(name, str) and name.strip():
+        tags.append(name.strip())
+    status = str(event.get("status", "") or "").strip()
+    if status:
+        tags.append(status)
+    return tags
+
+
+def _set_trace_tags(span: Optional[Any], tags: List[str]) -> None:
+    """Stamps trace tags onto a live span's OTel attributes. Never raises.
+
+    Mirrors what `propagate_attributes(tags=...)` does at span creation
+    (a `langfuse.trace.tags` list attribute, which the backend derives the
+    Trace Tags column from) — but callable at finish time, when the run
+    outcome is actually known.
+    """
+    try:
+        clean = [str(t).strip() for t in (tags or [])]
+        clean = [t for t in clean if t]
+        if not clean:
+            return
+        otel_span = getattr(span, "_otel_span", None)
+        setter = getattr(otel_span, "set_attribute", None)
+        if not callable(setter):
+            return
+        try:
+            from langfuse import LangfuseOtelSpanAttributes
+
+            key = str(LangfuseOtelSpanAttributes.TRACE_TAGS)
+        except ImportError:
+            key = "langfuse.trace.tags"
+        setter(key, clean)
+    except Exception as e:
+        logger.debug(f"Langfuse trace tags skipped: {e}")
+
+
+def _root_output(
+    event: Dict[str, Any],
+    duration_s: float,
+    max_chars: int = DEFAULT_TRACE_MAX_CHARS,
+) -> Dict[str, Any]:
+    """Shared agent-span output payload (turns, end-of-run messages, duration).
+
+    `messages` is the end-of-run context snapshot (system prompt first), so
+    the UI shows both per-turn deltas (generation children) and the final
+    state (root). Per-message content is truncated to bound span payloads.
+    `status` is explicit here (and in metadata) so the outcome never lives
+    only in the span name.
+    """
     return {
         "final_response": event.get("final_response", ""),
         "turns": event.get("turns", []),
         "tools": event.get("tools", []),
+        "messages": truncate_messages(event.get("messages", []), max_chars),
         "duration_s": duration_s,
+        "status": str(event.get("status", "unknown")),
         "error": event.get("error", ""),
     }
 
@@ -288,6 +371,7 @@ def _root_metadata(event: Dict[str, Any], duration_s: float) -> Dict[str, Any]:
         "compactions": event.get("compactions", 0),
         "tokens": tokens,
         "duration_s": duration_s,
+        "status": str(event.get("status", "unknown")),
     }
 
 
@@ -386,11 +470,19 @@ def start_langfuse_run(
     user_message: str = "",
     model_parameters: Optional[Dict[str, Any]] = None,
     available_tools: Optional[List[str]] = None,
+    system_prompt: str = "",
+    tool_schemas: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: str = "auto",
+    injected_memory: str = "",
+    max_chars: int = DEFAULT_TRACE_MAX_CHARS,
 ) -> Optional[Dict[str, Any]]:
     """Opens a live root agent span at run start (true Latency). Never raises.
 
     The span stays open for the whole ReAct loop, so the UI's Latency column
-    measures the real run. Returns an opaque handle for the per-turn helpers
+    measures the real run. Root input captures the run's full starting
+    request (system prompt, injected memory block, tool schemas);
+    per-turn deltas ride on the generation children, the end-of-run snapshot
+    on the finish output. Returns an opaque handle for the per-turn helpers
     and `finish_langfuse_run`, or None when exporting is unavailable.
     """
     client = _make_client(host, public_key, secret_key, timeout_s)
@@ -415,7 +507,13 @@ def start_langfuse_run(
             as_type="agent",
             input={
                 "thread": thread,
-                "user_message": truncate_text(user_message),
+                "user_message": truncate_text(user_message, max_chars),
+                "system_prompt": truncate_text(system_prompt, max_chars),
+                # Memory/procedure note as its own field: it rides in the
+                # system prompt tail, which truncation would otherwise amputate.
+                "injected_memory": truncate_text(injected_memory, max_chars),
+                "tool_choice": tool_choice,
+                "tool_schemas": tool_schemas or [],
             },
             metadata={
                 "model": model,
@@ -425,7 +523,13 @@ def start_langfuse_run(
             },
             level="DEFAULT",
         )
-        return {"client": client, "span": span, "prop_ctx": prop_ctx, "run_id": run_id}
+        return {
+            "client": client,
+            "span": span,
+            "prop_ctx": prop_ctx,
+            "run_id": run_id,
+            "max_chars": max_chars,
+        }
     except Exception as e:
         logger.warning(f"Langfuse trace start failed (run unaffected): {e}")
         _exit_trace_context(prop_ctx)
@@ -438,15 +542,34 @@ def start_langfuse_generation(
     name: str,
     turn: Optional[int] = None,
     available_tools: Optional[List[str]] = None,
+    new_messages: Optional[List[Dict[str, Any]]] = None,
+    compacted: bool = False,
 ) -> Optional[Any]:
-    """Opens a live generation child before an LLM call. Never raises."""
+    """Opens a live generation child before an LLM call. Never raises.
+
+    `new_messages` carries only the context entries added since the previous
+    call (each call's input = previous input + delta), so the children chain
+    reconstructs the full request with zero duplication. When compaction
+    replaced history mid-run, the caller passes the full snapshot once with
+    `compacted=True` instead of a delta.
+    """
     if not handle or "span" not in handle:
         return None
     try:
+        max_chars = handle.get("max_chars", DEFAULT_TRACE_MAX_CHARS)
+        try:
+            max_chars = int(max_chars)
+        except (TypeError, ValueError):
+            max_chars = DEFAULT_TRACE_MAX_CHARS
         return handle["span"].start_observation(
             name=name,
             as_type="generation",
-            input={"turn": turn, "available_tools": available_tools or []},
+            input={
+                "turn": turn,
+                "available_tools": available_tools or [],
+                "new_messages": truncate_messages(new_messages or [], max_chars),
+                "compacted": compacted,
+            },
             metadata={"turn": turn} if turn is not None else {},
         )
     except Exception as e:
@@ -546,15 +669,20 @@ def finish_langfuse_run(handle: Optional[Dict[str, Any]], event: Dict[str, Any])
     try:
         status = str(event.get("status", "unknown"))
         duration_s = float(event.get("duration_s", 0.0) or 0.0)
+        try:
+            max_chars = int(handle.get("max_chars", DEFAULT_TRACE_MAX_CHARS))
+        except (TypeError, ValueError):
+            max_chars = DEFAULT_TRACE_MAX_CHARS
         span.update(
             name=f"studymate-run:{status} ({duration_s:.1f}s)",
-            output=_root_output(event, duration_s),
+            output=_root_output(event, duration_s, max_chars),
             metadata=_root_metadata(event, duration_s),
             level="ERROR" if status == "error" else "DEFAULT",  # type: ignore[arg-type]
             status_message=str(event.get("error", "")) or None,
         )
     except Exception as e:
         logger.debug(f"Langfuse run update skipped: {e}")
+    _set_trace_tags(span, _run_tags(event))
     try:
         span.end()
     except Exception as e:
@@ -620,6 +748,7 @@ def export_langfuse(
             status_message=str(event.get("error", "")) or None,
         )
         _emit_child_observations(span, event)
+        _set_trace_tags(span, _run_tags(event))
         span.end()
         client.flush()
         return True

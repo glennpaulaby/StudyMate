@@ -42,3 +42,15 @@ def test_multi_turn_history_accumulation():
     assert len(reset_msgs) == 1
     assert reset_msgs[0].role == Role.SYSTEM
     assert ctx.user_turn_count == 0
+
+
+def test_injected_note_property_mirrors_merge_state():
+    """Verify the read-only note view tracks inject/reset lifecycle."""
+    ctx = ContextManager(custom_system_prompt="System instructions")
+    assert ctx.injected_note is None
+    ctx.inject_system_note("  facts block  ")
+    assert ctx.injected_note == "facts block"
+    assert "facts block" in ctx.get_messages()[0].content
+    ctx.reset_injected_note()
+    assert ctx.injected_note is None
+    assert "facts block" not in ctx.get_messages()[0].content

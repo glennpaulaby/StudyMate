@@ -110,6 +110,11 @@ class ContextManager:
             self._init_system_prompt()
         return self.messages[0]
 
+    @property
+    def injected_note(self) -> Optional[str]:
+        """Currently merged memory/procedure note, if any (read-only view)."""
+        return self._injected_note
+
     def reset_injected_note(self) -> None:
         """Clears the merged note so a stale per-turn block never leaks forward."""
         self._injected_note = None
