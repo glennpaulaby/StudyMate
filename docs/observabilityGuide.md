@@ -65,6 +65,13 @@ the volumes went with the wipe: sign up, create org + project, get fresh keys,
 update `.env` (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`), and you're done —
 no code changes needed.
 
+Then provision the dashboard (the scoped boots above never start the
+one-shot provisioner, so without this there are traces but no dashboard):
+
+```powershell
+docker compose up provision-dashboard   # expect provision-dashboard: OK
+```
+
 ## 6. Sessions: local vs. container
 
 - **Local:** `studymate` from the venv — uses your repo `workspace/` and
