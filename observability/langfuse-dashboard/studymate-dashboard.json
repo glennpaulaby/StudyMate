@@ -103,27 +103,18 @@
                                            "x":  3,
                                            "y":  0,
                                            "width":  3,
-                                           "height":  4
-                                       },
-                                       {
-                                           "type":  "widget",
-                                           "id":  "8011b498-e717-4cea-894e-242c4101f742",
-                                           "widgetId":  "cmu334b8o000xpj07ryw3zrwe",
-                                           "x":  0,
-                                           "y":  16,
-                                           "width":  6,
-                                           "height":  6
-                                       },
-                                       {
-                                           "type":  "widget",
-                                           "id":  "a0a4c593-9341-4501-a314-7eab53c7a667",
-                                           "widgetId":  "cmu35q4xg0014pj07jzn28f1c",
-                                           "x":  6,
-                                           "y":  16,
-                                           "width":  6,
-                                           "height":  6
-                                       }
-                                   ]
+                                            "height":  4
+                                        },
+                                        {
+                                            "type":  "widget",
+                                            "id":  "e73f4cc3-9a5b-4e8c-b2d4-f6a7b8c9d0e1",
+                                            "widgetId":  "cmu501mcptime000000000003",
+                                            "x":  0,
+                                            "y":  16,
+                                            "width":  12,
+                                            "height":  6
+                                        }
+                                    ]
                    },
     "filters":  [
 
