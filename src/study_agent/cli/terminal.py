@@ -1092,6 +1092,16 @@ def run_cli(
                     f"[dim]{escape(str(tc.arguments))}[/dim]"
                 )
 
+            def on_tool_end(tc: ToolCall, observation: str) -> None:
+                if observation.startswith("Error:"):
+                    console.print(
+                        f"  [bold red]✗ Failed:[/bold red] [yellow]{escape(tc.name)}[/yellow]"
+                    )
+                else:
+                    console.print(
+                        f"  [dim green]✓ Completed:[/dim green] [yellow]{escape(tc.name)}[/yellow]"
+                    )
+
             # Procedures: approved routines merge into the system note (template-safe,
             # idempotent replace); drafts are surfaced, never silently followed.
             approved = match_procedures(procedures_dir, user_input)
@@ -1125,7 +1135,8 @@ def run_cli(
                         result = engine.run(
                             user_message=user_input,
                             context=context,
-                            on_tool_start=on_tool_start
+                            on_tool_start=on_tool_start,
+                            on_tool_end=on_tool_end,
                         )
                     except Exception as e:
                         console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")

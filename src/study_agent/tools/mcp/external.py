@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 import threading
 from typing import Any, Callable, Optional
 
@@ -136,6 +137,9 @@ class ExternalMCPService:
     async def _start_worker(self) -> None:
         environment = os.environ.copy()
         environment.update(self.env)
+        # Keep the MCP subprocess from writing diagnostics into the REPL.
+        environment.setdefault("LOG_LEVEL", "ERROR")
+        environment.setdefault("PYTHONWARNINGS", "ignore")
         server = StdioServerParameters(
             command=self.command, args=self.args, env=environment
         )
@@ -156,9 +160,9 @@ class ExternalMCPService:
         per-call ``async with``.
         """
         try:
-            async with stdio_client(server) as (read, write), ClientSession(
-                read, write
-            ) as session:
+            async with stdio_client(
+                server, errlog=subprocess.DEVNULL
+            ) as (read, write), ClientSession(read, write) as session:
                 await session.initialize()
                 self._session = session
                 ready.set()
