@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +38,17 @@ from study_agent.memory.rerank import InnKubeReranker, Reranker
 from study_agent.memory.store import MemoryStore
 from study_agent.memory.threads import generate_thread_name, resolve_thread
 from study_agent.memory.tools import register_memory_tools
+from study_agent.observability.metrics import (
+    init_metrics,
+    observe_compaction,
+    observe_permission,
+    observe_run,
+)
+from study_agent.observability.tracing import (
+    append_trace,
+    build_run_event,
+    new_run_id,
+)
 from study_agent.study.griller import SocraticGriller
 from study_agent.study.procedures import DRAFT, format_procedures_block, match_procedures
 from study_agent.study.linter import VaultLintReport, VaultLinter
@@ -224,14 +236,34 @@ def create_input_session(toolbar_fn, completer=None) -> Optional[object]:
 
 
 def read_student_input(session) -> str:
-    """Reads one REPL line via the session (styled) or Rich fallback."""
-    if (
+    """Reads one REPL line via the session (styled) or Rich fallback.
+
+    Prompts run inside ``patch_stdout`` (when a real console exists) so
+    background output (e.g. the async Langfuse trace exporter) renders above
+    the input line instead of corrupting the ``student >`` prompt. Headless
+    environments (tests, pipes) transparently fall back to unguarded prompts.
+    """
+    from contextlib import ExitStack
+
+    def _prompt_styled() -> str:
+        return session.prompt([("class:prompt", "student > ")], complete_while_typing=True).strip()
+
+    def _prompt_fallback() -> str:
+        return console.input("[bold cyan]student > [/bold cyan]").strip()
+
+    use_styled = (
         session is not None
         and getattr(console.input, "_mock_wraps", None) is None
         and getattr(console.input, "side_effect", None) is None
-    ):
+    )
+    with ExitStack() as stack:
         try:
-            return session.prompt([("class:prompt", "student > ")], complete_while_typing=True).strip()
+            from prompt_toolkit.patch_stdout import patch_stdout
+            stack.enter_context(patch_stdout())
+        except Exception:
+            pass  # no console to guard (tests/pipes) — prompt unguarded
+        try:
+            return _prompt_styled() if use_styled else _prompt_fallback()
         except (KeyboardInterrupt, EOFError):
             raise
         except Exception:
@@ -662,6 +694,10 @@ def print_config(config: AppConfig) -> None:
     table.add_row("Memory DB", config.memory.db_path)
     table.add_row("Context Window", f"{config.compaction.context_windows.get(config.llm.model, config.compaction.default_context_window)} (model: {config.llm.model})")
     table.add_row("Compact Threshold", f"{config.compaction.threshold} (~{int(config.compaction.context_windows.get(config.llm.model, config.compaction.default_context_window) * config.compaction.threshold)} tokens)")
+    table.add_row("Metrics Enabled", str(config.observability.metrics_enabled))
+    table.add_row("Metrics Endpoint", f"{config.observability.metrics_host}:{config.observability.metrics_port}")
+    table.add_row("Trace File", config.observability.trace_file)
+    table.add_row("Langfuse", f"{'enabled' if config.observability.langfuse_enabled else 'disabled'} ({config.observability.langfuse_host})")
     table.add_row("API Key Set?", "Yes" if config.llm.api_key else "No (Set INNKUBE_API_KEY)")
 
     console.print(table)
@@ -757,6 +793,10 @@ def run_cli(
     client = llm_client or OpenAICompatibleLLMClient(app_config.llm)
     context = ContextManager(system_prompt_path=app_config.agent.system_prompt_path)
 
+    obs_cfg = app_config.observability
+    if obs_cfg.metrics_enabled:
+        init_metrics(True, host=obs_cfg.metrics_host, port=obs_cfg.metrics_port)
+
     registry = tool_registry or ToolRegistry(
         policy=policy_from_config(app_config.permissions),
     )
@@ -771,6 +811,7 @@ def run_cli(
                 f"permission: tool={event.tool} decision={event.decision.value} "
                 f"executed={event.executed} rule={event.source}"
             )
+            observe_permission(event.tool, event.decision.value)
 
         registry.on_permission_decision.append(_log_permission_event)
     project_root = Path.cwd().resolve()
@@ -799,6 +840,51 @@ def run_cli(
 
     if "delegate_task" not in registry.tools:
         register_delegation_tools(registry, client)
+    # MCP health heartbeat: periodic probes fanning out to Prometheus
+    # gauges + Langfuse heartbeat traces (mcp-health:* observations).
+    if obs_cfg.health_enabled and app_config.tools.mcp.enabled:
+        from functools import partial
+
+        from study_agent.observability.health import (
+            HealthHeartbeat,
+            build_heartbeat_event,
+            probe_external_bridge,
+            probe_obsidian_vault,
+        )
+        from study_agent.observability.tracing import export_langfuse_async as _export_hb
+
+        hb_vault = Path(app_config.tools.mcp.vault_path)
+        if not hb_vault.is_absolute():
+            hb_vault = (project_root / hb_vault).resolve()
+        hb_probes = [
+            partial(
+                probe_external_bridge,
+                command=app_config.tools.mcp.search_command,
+                args=list(app_config.tools.mcp.search_args),
+            ),
+            partial(probe_obsidian_vault, hb_vault),
+        ]
+
+        def _on_health(results) -> None:
+            event = build_heartbeat_event(results)
+            append_trace(obs_cfg.trace_file, event)
+            if obs_cfg.langfuse_enabled:
+                _export_hb(
+                    event,
+                    host=obs_cfg.langfuse_host,
+                    public_key=obs_cfg.langfuse_public_key,
+                    secret_key=obs_cfg.langfuse_secret_key,
+                )
+
+        HealthHeartbeat(
+            hb_probes,
+            interval_s=obs_cfg.health_interval_seconds,
+            on_result=_on_health,
+        ).start()
+        console.print(
+            "[dim]MCP health heartbeat on "
+            f"(every {obs_cfg.health_interval_seconds:g}s → Prometheus + Langfuse).[/dim]"
+        )
 
     engine = AgentEngine(
         llm_client=client,
@@ -806,6 +892,7 @@ def run_cli(
         config=app_config.agent,
         compaction=app_config.compaction,
         llm_base_url=app_config.llm.base_url,
+        observability=app_config.observability,
     )
 
     memory_store: Optional[MemoryStore] = None
@@ -1072,6 +1159,7 @@ def run_cli(
                 if not compacted:
                     console.print("[yellow]Compaction did not run (breaker open or summarizer failed).[/yellow]")
                     continue
+                observe_compaction("manual")
                 if memory_store is not None and active_thread_id is not None:
                     try:
                         memory_store.add_message(active_thread_id, context.get_messages()[1])
@@ -1124,11 +1212,22 @@ def run_cli(
             ensure_thread(user_input)
             pre_len = len(context.get_messages())
 
+            # Stamp thread provenance onto memory_store (harness-injected per
+            # turn so stored facts carry thread id + name + date).
+            turn_thread_name = ""
+            if memory_store is not None and active_thread_id is not None:
+                store_tool = registry.get("memory_store")
+                if store_tool is not None and hasattr(store_tool, "set_thread_context"):
+                    thread = memory_store.get_thread(active_thread_id, include_archived=True)
+                    turn_thread_name = thread.name if thread else ""
+                    store_tool.set_thread_context(active_thread_id, turn_thread_name)
+
             # Run ReAct Loop with animated status
             thinking = console.status("[bold green]StudyMate is thinking...[/bold green]", spinner="dots")
             # The inner rich.live.Live (Status itself lacks is_started); the
             # confirmation handler pauses/resumes it so the y/n line stays visible.
             spinner_ref["live"] = thinking._live
+            turn_start = time.perf_counter()
             try:
                 with thinking:
                     try:
@@ -1137,8 +1236,25 @@ def run_cli(
                             context=context,
                             on_tool_start=on_tool_start,
                             on_tool_end=on_tool_end,
+                            thread_id=active_thread_id or "",
+                            thread_name=turn_thread_name,
                         )
                     except Exception as e:
+                        duration_s = time.perf_counter() - turn_start
+                        observe_run("error", duration_s)
+                        if obs_cfg.metrics_enabled or obs_cfg.langfuse_enabled:
+                            event = build_run_event(
+                                model=app_config.llm.model,
+                                status="error",
+                                run_id=new_run_id(),
+                                thread_id=active_thread_id or "",
+                                thread_name=turn_thread_name,
+                                error=str(e),
+                            )
+                            append_trace(obs_cfg.trace_file, event)
+                            # No post-hoc Langfuse export here: the engine owns a
+                            # live span per run and already closed it with the
+                            # error (true latency) before re-raising.
                         console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
                         continue
             finally:
@@ -1170,6 +1286,13 @@ def run_cli(
 
     if memory_store is not None:
         memory_store.close()
+
+
+def _launch_new_terminal_enabled() -> bool:
+    """Whether `main()` may pop a dedicated window (opt-in, default False)."""
+    import os
+
+    return os.getenv("LAUNCH_NEW_TERMINAL", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def launch_in_new_window() -> bool:
@@ -1226,12 +1349,13 @@ def main() -> None:
         run_cli()
         return
 
-    # Attempt to pop up a dedicated window
-    if launch_in_new_window():
+    # Opt-in dedicated window (default: same terminal). Enable with LAUNCH_NEW_TERMINAL=true.
+    if _launch_new_terminal_enabled() and launch_in_new_window():
         console.print("[bold green]🎓 Launched StudyMate in a new window![/bold green]")
         console.print("[dim]You can close this terminal or keep working here.[/dim]")
-    else:
-        run_cli()
+        return
+
+    run_cli()
 
 
 if __name__ == "__main__":

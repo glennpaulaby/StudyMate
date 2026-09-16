@@ -63,11 +63,17 @@ class ChatMessage(BaseModel):
 class LLMResponse(BaseModel):
     """Output from the LLM inference call."""
     content: Optional[str] = None
+    reasoning_content: Optional[str] = Field(
+        default=None,
+        description="Chain-of-thought text when the provider exposes it "
+        "(e.g. reasoning_content); None when the endpoint omits it.",
+    )
     tool_calls: List[ToolCall] = Field(default_factory=list)
     finish_reason: Optional[str] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    reasoning_tokens: int = 0
     raw_response: Optional[Dict[str, Any]] = None
 
 
@@ -79,6 +85,7 @@ class AgentRunResult(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    reasoning_tokens: int = 0
     is_success: bool = True
     error_message: Optional[str] = None
     run_id: Optional[str] = None

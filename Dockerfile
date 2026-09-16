@@ -41,4 +41,6 @@ ENV PYTHONPATH=/app/src
 ENV PATH="/opt/mcp/ddg/bin:${PATH}"
 
 # Entrypoint launches the terminal agent
+# Port 8000 serves the Prometheus /metrics endpoint when enabled.
+EXPOSE 8000
 ENTRYPOINT ["studymate"]

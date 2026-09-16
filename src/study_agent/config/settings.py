@@ -104,7 +104,23 @@ class ObservabilityConfig(BaseModel):
     """Logging and Prometheus telemetry settings."""
     log_level: str = Field(default="INFO", description="Logging verbosity")
     metrics_enabled: bool = Field(default=False, description="Prometheus metrics exporter switch")
+    metrics_host: str = Field(default="127.0.0.1", description="Prometheus exporter bind host")
     metrics_port: int = Field(default=8000, ge=1024, le=65535, description="Prometheus scrape port")
+    trace_file: str = Field(
+        default="./observability/traces.jsonl",
+        description="Harness-owned JSONL trace log (outside agent write jail)",
+    )
+    trace_max_chars: int = Field(
+        default=4000, ge=0, description="Per-argument cap in traces (0 disables truncation)"
+    )
+    langfuse_enabled: bool = Field(default=False, description="Langfuse trace exporter switch")
+    langfuse_host: str = Field(default="http://localhost:3000", description="Self-hosted Langfuse base URL")
+    langfuse_public_key: str = Field(default="", description="Langfuse project public key (secret, env-only)")
+    langfuse_secret_key: str = Field(default="", description="Langfuse project secret key (secret, env-only)")
+    health_enabled: bool = Field(default=False, description="Periodic MCP health heartbeat switch")
+    health_interval_seconds: float = Field(
+        default=60.0, ge=5.0, description="Seconds between MCP health probes"
+    )
 
 
 class AppConfig(BaseModel):

@@ -1,0 +1,35 @@
+# StudyMate dashboard recording rules (Week 3 Task 1).
+# One rule per required dashboard panel. Query the `studymate:*` series
+# from Prometheus/Grafana; raw gauges (active runs) need no rule.
+groups:
+  - name: studymate.agent
+    interval: 30s
+    rules:
+      # Agent throughput (runs/sec over 5m)
+      - record: studymate:agent_throughput_5m
+        expr: sum(rate(studymate_agent_runs_total[5m]))
+      # Success and failure rates
+      - record: studymate:agent_success_rate_5m
+        expr: |
+          sum(rate(studymate_agent_runs_total{status="success"}[5m]))
+          / sum(rate(studymate_agent_runs_total[5m]))
+      - record: studymate:agent_failure_rate_5m
+        expr: |
+          sum(rate(studymate_agent_runs_total{status=~"error|max_iterations|empty"}[5m]))
+          / sum(rate(studymate_agent_runs_total[5m]))
+      # Agent-run and component latency (p95)
+      - record: studymate:component_latency_p95_5m
+        expr: |
+          histogram_quantile(0.95, sum by (le, component) (rate(studymate_agent_run_duration_seconds_bucket[5m])))
+      # LLM token consumption rate by model and type
+      - record: studymate:llm_tokens_rate_5m
+        expr: sum by (model, type) (rate(studymate_llm_tokens_total[5m]))
+      # Built-in and MCP tool usage rate
+      - record: studymate:tool_usage_rate_5m
+        expr: sum by (tool, source) (rate(studymate_tool_calls_total[5m]))
+      # Permission decisions (contract series, teammate-owned)
+      - record: studymate:permission_decisions_rate_5m
+        expr: sum by (decision) (rate(studymate_permission_decisions_total[5m]))
+      # Sub-agent activity (contract series, teammate-owned)
+      - record: studymate:subagent_activity_rate_5m
+        expr: sum by (config) (rate(studymate_subagent_runs_total[5m]))

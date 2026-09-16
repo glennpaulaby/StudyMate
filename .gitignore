@@ -68,3 +68,6 @@ workspace/artifacts/*
 # Exception: team-shared procedure bundles are curated, reviewable knowledge
 !workspace/artifacts/procedures/
 
+# Observability runtime data (harness-owned JSONL trace log — never commit)
+observability/traces.jsonl
+

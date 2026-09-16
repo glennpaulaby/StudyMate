@@ -3,10 +3,26 @@ from typing import Any, Dict, List, Optional
 from study_agent.memory.embeddings import Embedder, pack_embedding
 from study_agent.memory.rerank import Reranker
 from study_agent.memory.retrieval import hybrid_recall
-from study_agent.memory.store import MemoryStore
+from study_agent.memory.store import FactRecord, MemoryStore
+from study_agent.observability.metrics import observe_memory
 from study_agent.tools.base import BaseTool, ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def format_fact_line(f: FactRecord) -> str:
+    """Renders one fact with thread + date provenance for LLM consumption."""
+    tag_str = f" [tags: {', '.join(f.tags)}]" if f.tags else ""
+    parts = []
+    if f.source_thread_name:
+        parts.append(f"thread '{f.source_thread_name}'")
+    elif f.source_thread:
+        parts.append(f"thread {f.source_thread[:8]}")
+    date = (f.created_at or "").split("T")[0]
+    if date:
+        parts.append(f"stored {date}")
+    suffix = f" ({', '.join(parts)})" if parts else ""
+    return f"- #{f.id} [{f.topic}] {f.fact}{tag_str}{suffix}"
 
 
 class MemoryStoreTool(BaseTool):
@@ -15,6 +31,17 @@ class MemoryStoreTool(BaseTool):
     def __init__(self, store: MemoryStore, embedder: Optional[Embedder] = None) -> None:
         self.store = store
         self.embedder = embedder
+        self.current_thread_id = ""
+        self.current_thread_name = ""
+
+    def set_thread_context(self, thread_id: str, thread_name: str) -> None:
+        """Pins the active thread provenance stamped onto stored facts.
+
+        Called per turn by the REPL (harness-injected, never LLM-supplied —
+        the schema exposes no thread fields so the model can't forge them).
+        """
+        self.current_thread_id = thread_id or ""
+        self.current_thread_name = thread_name or ""
 
     @property
     def name(self) -> str:
@@ -62,10 +89,18 @@ class MemoryStoreTool(BaseTool):
                 logger.warning(f"Fact embedding failed, storing text-only: {e}")
         try:
             record, created = self.store.store_fact(
-                topic=topic, fact=fact, tags=tag_list, embedding=embedding, embedding_model=model
+                topic=topic,
+                fact=fact,
+                tags=tag_list,
+                source_thread=self.current_thread_id or None,
+                source_thread_name=self.current_thread_name or None,
+                embedding=embedding,
+                embedding_model=model,
             )
         except ValueError as e:
+            observe_memory("store_fact", "error")
             return f"Error: {e}"
+        observe_memory("store_fact", "created" if created else "deduplicated")
         verb = "Stored" if created else "Already known (deduplicated)"
         vec_note = "" if embedding is not None else " (text-only, no vector)"
         return f"{verb} fact #{record.id} under topic '{record.topic}'{vec_note}."
@@ -119,11 +154,12 @@ class MemoryRecallTool(BaseTool):
             self.store, query, self.embedder, limit=limit, reranker=self.reranker
         )
         if not facts:
+            observe_memory("recall", "empty")
             return f"No persisted facts found for '{query}'."
+        observe_memory("recall", "semantic" if semantic_used else "keyword")
         lines = [f"Found {len(facts)} fact(s):"]
         for f in facts:
-            tag_str = f" [tags: {', '.join(f.tags)}]" if f.tags else ""
-            lines.append(f"- #{f.id} [{f.topic}] {f.fact}{tag_str}")
+            lines.append(format_fact_line(f))
         total = self.store.count_facts(query)
         if total > len(facts):
             lines.append(f"({total - len(facts)} more; narrow the query or raise limit)")

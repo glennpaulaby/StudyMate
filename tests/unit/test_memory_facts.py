@@ -17,16 +17,75 @@ def test_fact_store_and_recall_roundtrip(tmp_path: Path):
     store = MemoryStore(tmp_path / "memory.db")
     try:
         record, created = store.store_fact(
-            "dijkstra", "Struggles with edge relaxations", tags=["graphs", "exam"], source_thread="abc"
+            "dijkstra",
+            "Struggles with edge relaxations",
+            tags=["graphs", "exam"],
+            source_thread="abc",
+            source_thread_name="graphs-chat",
         )
         assert created is True
         assert record.id == 1
         assert record.tags == ["graphs", "exam"]
         assert record.source_thread == "abc"
+        assert record.source_thread_name == "graphs-chat"
+        assert record.created_at.split("T")[0]  # ISO date present
 
         hits = store.recall_facts("relaxations")
         assert len(hits) == 1 and hits[0].topic == "dijkstra"
         assert store.count_facts() == 1
+    finally:
+        store.close()
+
+
+def test_fact_revive_fills_missing_provenance(tmp_path: Path):
+    """Verify a duplicate store backfills thread id/name when the row lacks them."""
+    store = MemoryStore(tmp_path / "memory.db")
+    try:
+        first, _ = store.store_fact("pizza", "Likes margherita")
+        assert first.source_thread is None and first.source_thread_name is None
+        second, created = store.store_fact(
+            "pizza", "Likes margherita", source_thread="tid123", source_thread_name="lunch"
+        )
+        assert created is False and second.id == first.id
+        assert second.source_thread == "tid123"
+        assert second.source_thread_name == "lunch"
+        # Existing provenance is never overwritten by a later thread.
+        third, _ = store.store_fact(
+            "pizza", "Likes margherita", source_thread="other", source_thread_name="dinner"
+        )
+        assert third.source_thread == "tid123"
+        assert third.source_thread_name == "lunch"
+    finally:
+        store.close()
+
+
+def test_thread_name_column_migrated_on_legacy_db(tmp_path: Path):
+    """Verify pre-provenance DB files gain source_thread_name on open."""
+    import sqlite3
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE facts (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, fact TEXT NOT NULL, "
+        "tags TEXT NOT NULL DEFAULT '', source_thread TEXT, created_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0, "
+        "UNIQUE(topic, fact))"
+    )
+    conn.execute(
+        "INSERT INTO facts (topic, fact, tags, source_thread, created_at, archived) "
+        "VALUES ('t', 'old fact', '', 'oldt', '2026-01-01T00:00:00+00:00', 0)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = MemoryStore(db)
+    try:
+        cols = [r["name"] for r in store._conn.execute("PRAGMA table_info(facts)").fetchall()]
+        assert "source_thread_name" in cols
+        old = store.recall_facts("old fact")
+        assert len(old) == 1 and old[0].source_thread_name is None
+        rec, created = store.store_fact("t", "new fact", source_thread="n", source_thread_name="now")
+        assert created is True and rec.source_thread_name == "now"
     finally:
         store.close()
 
@@ -136,6 +195,37 @@ def test_memory_tools_via_registry(tmp_path: Path):
         empty_registry = ToolRegistry()
         register_memory_tools(empty_registry, None)  # no-op, must not raise
         assert empty_registry.list_schemas() == []
+    finally:
+        store.close()
+
+
+def test_memory_store_tool_stamps_thread_and_recall_shows_it(tmp_path: Path):
+    """Verify harness thread context lands on facts and recall displays it."""
+    from study_agent.memory.tools import format_fact_line
+
+    store = MemoryStore(tmp_path / "memory.db")
+    try:
+        registry = ToolRegistry()
+        register_memory_tools(registry, store)
+        tool = registry.get("memory_store")
+        assert tool is not None and hasattr(tool, "set_thread_context")
+
+        # Without context: no provenance, date only.
+        assert "Stored fact #1" in registry.execute(
+            "memory_store", {"topic": "t", "fact": "context-free"}
+        )
+        line = format_fact_line(store.recall_facts("context-free")[0])
+        assert "thread" not in line and "stored 20" in line
+
+        # With context: thread id + name + date on the row and in recall.
+        tool.set_thread_context("tid999", "pizza-chat")
+        assert "Stored fact #2" in registry.execute(
+            "memory_store", {"topic": "t", "fact": "with context"}
+        )
+        res = registry.execute("memory_recall", {"query": "with context"})
+        assert "thread 'pizza-chat'" in res and "stored 20" in res
+        rec = store.recall_facts("with context")[0]
+        assert rec.source_thread == "tid999" and rec.source_thread_name == "pizza-chat"
     finally:
         store.close()
 

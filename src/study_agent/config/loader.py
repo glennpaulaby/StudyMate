@@ -57,4 +57,37 @@ def load_config(
     if not config.llm.api_key:
         config.llm.api_key = os.getenv("INNKUBE_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
 
+    # 6. Observability overrides (env > YAML > defaults). Never commit secrets.
+    _obs = config.observability
+    if os.getenv("STUDYMATE_METRICS_ENABLED", "") != "":
+        _obs.metrics_enabled = os.getenv("STUDYMATE_METRICS_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.getenv("STUDYMATE_METRICS_PORT", "") != "":
+        try:
+            _obs.metrics_port = int(os.getenv("STUDYMATE_METRICS_PORT", ""))
+        except ValueError:
+            pass
+    if os.getenv("STUDYMATE_METRICS_HOST", "") != "":
+        _obs.metrics_host = os.getenv("STUDYMATE_METRICS_HOST", "").strip()
+    if os.getenv("STUDYMATE_TRACE_MAX_CHARS", "") != "":
+        try:
+            _obs.trace_max_chars = int(os.getenv("STUDYMATE_TRACE_MAX_CHARS", ""))
+        except ValueError:
+            pass
+    if os.getenv("LANGFUSE_ENABLED", "") != "":
+        _obs.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.getenv("LANGFUSE_HOST", "") != "":
+        _obs.langfuse_host = os.getenv("LANGFUSE_HOST", "").strip()
+    if os.getenv("STUDYMATE_HEALTH_ENABLED", "") != "":
+        _obs.health_enabled = os.getenv("STUDYMATE_HEALTH_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.getenv("STUDYMATE_HEALTH_INTERVAL_SECONDS", "") != "":
+        try:
+            _obs.health_interval_seconds = float(os.getenv("STUDYMATE_HEALTH_INTERVAL_SECONDS", ""))
+        except ValueError:
+            pass
+    # Secrets: env-only, never from YAML (mirrors the LLM API-key pattern).
+    if os.getenv("LANGFUSE_PUBLIC_KEY", "") != "":
+        _obs.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    if os.getenv("LANGFUSE_SECRET_KEY", "") != "":
+        _obs.langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+
     return config

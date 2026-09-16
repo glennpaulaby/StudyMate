@@ -370,3 +370,40 @@ def test_main_invokes_run_cli(monkeypatch):
     monkeypatch.setattr(terminal, "run_cli", called)
     terminal.main()
     called.assert_called_once_with()
+
+
+def test_main_stays_in_same_terminal_by_default(monkeypatch):
+    """LAUNCH_NEW_TERMINAL unset -> no window spawn even on an interactive tty."""
+    monkeypatch.delenv("LAUNCH_NEW_TERMINAL", raising=False)
+    monkeypatch.delenv("STUDYMATE_SPAWNED", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    spawned = MagicMock(return_value=True)
+    monkeypatch.setattr(terminal, "launch_in_new_window", spawned)
+    called = MagicMock()
+    monkeypatch.setattr(terminal, "run_cli", called)
+    terminal.main()
+    spawned.assert_not_called()
+    called.assert_called_once_with()
+
+
+def test_main_spawns_new_window_when_enabled(monkeypatch):
+    """LAUNCH_NEW_TERMINAL=true -> dedicated window, run_cli not called here."""
+    monkeypatch.setenv("LAUNCH_NEW_TERMINAL", "true")
+    monkeypatch.delenv("STUDYMATE_SPAWNED", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    spawned = MagicMock(return_value=True)
+    monkeypatch.setattr(terminal, "launch_in_new_window", spawned)
+    called = MagicMock()
+    monkeypatch.setattr(terminal, "run_cli", called)
+    terminal.main()
+    spawned.assert_called_once_with()
+    called.assert_not_called()
+
+
+def test_read_student_input_uses_styled_session(monkeypatch):
+    """Verify input goes through the session prompt (patch_stdout-wrapped)."""
+    prompted = MagicMock(return_value="  hello  ")
+    fake_session = MagicMock()
+    fake_session.prompt = prompted
+    assert terminal.read_student_input(fake_session) == "hello"
+    prompted.assert_called_once()

@@ -19,6 +19,8 @@ dependencies = [
     "prompt-toolkit>=3.0.40",
     "questionary>=2.0.0",
     "sqliteai-vector>=1.1.0",
+    "prometheus-client>=0.20.0",
+    "langfuse>=2.60.0",
 ]
 
 

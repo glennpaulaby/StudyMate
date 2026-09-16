@@ -1,0 +1,20 @@
+# StudyMate Prometheus scrape config (Week 3 Task 1).
+# Scrape target is the studymate service's /metrics endpoint (port 8000).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - "rules.yml"
+
+scrape_configs:
+  # Persistent `up`-based runs (service-name DNS).
+  - job_name: "studymate"
+    static_configs:
+      - targets: ["studymate:8000"]
+  # Interactive `compose run --rm studymate` sessions: one-off containers get
+  # no service DNS alias, but publish :8000 on the host via --service-ports.
+  # (Docker Desktop resolves host.docker.internal; plain `up` uses the job above.)
+  - job_name: "studymate-run"
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
