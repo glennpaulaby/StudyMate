@@ -43,8 +43,8 @@ tools:
     # ~/.local/bin is on PATH) or fall back to uvx:
     #   search_command: "uvx"
     #   search_args: ["duckduckgo-mcp-server==0.7.0"]
-    search_command: "duckduckgo-mcp-server"
-    search_args: []
+    search_command: "uvx"
+    search_args: ["--with", "duckduckgo-mcp-server[browser]", "duckduckgo-mcp-server"]
 
 memory:
   enabled: true
