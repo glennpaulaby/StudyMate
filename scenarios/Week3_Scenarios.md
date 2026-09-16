@@ -4,7 +4,7 @@ Live-demo proposal for the Friday feedback session. Each scenario runs
 end-to-end on a TA machine with only secrets in `.env` (see `.env.example`).
 
 ```bash
-git checkout experimental/observability-layer
+git checkout main
 cp .env.example .env   # then set INNKUBE_API_KEY + generated Langfuse secrets
 docker compose pull    # skips studymate (pull_policy: build)
 docker compose build studymate
@@ -87,16 +87,39 @@ Goal: prove observability is strictly opt-in and offline-safe.
 1. `STUDYMATE_METRICS_ENABLED=false studymate`, ask a question, exit.
    - **Pass:** no `:8000` listener, no `traces.jsonl` writes, suite green.
 2. `pytest tests/unit/test_observability.py tests/e2e/test_observability.py`
-   - **Pass:** 15 passed — no-op mode, frozen series names, schema-v1
+   - **Pass:** 31 passed — no-op mode, frozen series names, schema-v2
      roundtrip, mocked Langfuse paths, fast-fail on unreachable host,
      teammate contract hooks (`permission_decisions_total`,
      `subagent_runs_total`).
+
+## 6. Subagent + permission traces (E. Khalyl)
+
+Goal: prove delegations and permission decisions land in both trace
+stores with parent linkage, ready for dashboard widgets.
+
+1. With metrics + Langfuse enabled, delegate once
+   (`student > grill me on tree search` → examiner) and run one gated
+   tool call.
+2. `tail -2 observability/traces.jsonl`
+   - **Pass:** a `subagent:examiner` event (`parent_run_id` = the REPL
+     run) and a `permission:*` batch event (`decision`, `executed`,
+     `rule` per gated call).
+3. `curl .../metrics | grep studymate_subagent_runs_total`
+   - **Pass:** `studymate_subagent_runs_total{config="examiner"} 1.0`;
+     child permission checks also appear under
+     `studymate_permission_decisions_total`.
+4. Langfuse → Traces: filter `subagent:*` / `permission:*`.
+   - **Pass:** delegation trace links to the parent run; permission
+     batch lists every gated call of the turn.
+5. Dashboard auto-provision: `docker compose up provision-dashboard`
+   - **Pass:** exit 0, `Studymate Dashboard` present with all tiles and
+     no clicks (idempotent: re-runs only PATCH in place).
 
 ---
 
 ## Cross-cutting checks
 
-- Full suite green: `pytest` (233 passed, 3 skipped without the DDG binary).
+- Full suite green: `pytest` (250 passed, 3 skipped without the DDG binary).
 - No secrets committed (`.env` gitignored; `.env.example` holds placeholders).
 - No deletions anywhere: `allow_delete=False`; traces are append-only.
 - Metric names frozen in `src/study_agent/observability/metrics.py` — the

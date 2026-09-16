@@ -269,6 +269,13 @@ class AgentEngine:
         if context is None:
             context = ContextManager(custom_system_prompt=self.system_prompt)
 
+        # Link delegations to this run: the shared DelegateTaskTool carries
+        # the live run id so child traces record a true parent_run_id.
+        if self.tool_registry is not None:
+            delegate_tool = self.tool_registry.get("delegate_task")
+            if delegate_tool is not None and hasattr(delegate_tool, "parent_run_id"):
+                delegate_tool.parent_run_id = run_id
+
         context.add_user_message(user_message)
 
         self._emit_telemetry("run_start", {

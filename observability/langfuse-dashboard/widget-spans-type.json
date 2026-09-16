@@ -1,0 +1,27 @@
+{
+    "id":  "cmu2zwamw000ipj07t4632cvp",
+    "createdAt":  "2026-09-15T18:18:25.879Z",
+    "updatedAt":  "2026-09-15T21:09:04.099Z",
+    "name":  "Spans Type",
+    "description":  "Distribution of Span types",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "type"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+
+                ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "PIE"
+                    }
+}

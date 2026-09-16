@@ -114,6 +114,28 @@ docker compose stop       # stop all, keep data (Langfuse account persists)
 docker compose up -d      # resume (see §6 warning about detached studymate)
 docker compose down -v    # NULEAR: deletes volumes incl. Langfuse account -> redo §5
 ```
+
+## 10. Dashboard auto-provision (fresh machines get every tile, zero clicks)
+
+The `Studymate Dashboard` + widgets live as JSON in
+`observability/langfuse-dashboard/` (committed). The one-shot
+`provision-dashboard` service upserts them by name on every boot:
+
+```powershell
+docker compose up provision-dashboard   # exit 0; re-runs only PATCH in place
+```
+
+Fresh-machine flow: sign up at :3000 → create project → backfill
+`LANGFUSE_PUBLIC_KEY/SECRET_KEY` in `.env` → `up` again (or run the
+one-liner above). Two tiles reference since-deleted widgets and are
+skipped with a WARNING — recreate them by hand if wanted.
+
+Hand-built widget workflow (yours stay portable): build/edit widgets in
+the UI as usual, then re-export into the repo so the next provision
+carries them everywhere — per widget/dashboard, UI ⋯ menu → Download
+as JSON, save into `observability/langfuse-dashboard/` (UTF-8, no BOM),
+commit, done. Next `up` everywhere reproduces them.
+
 ## Boilerplate 
 ```
 docker compose pull

@@ -1,0 +1,26 @@
+{
+    "id":  "cmu2ziwid000apj07z0pwaalh",
+    "createdAt":  "2026-09-15T18:08:01.045Z",
+    "updatedAt":  "2026-09-15T18:08:01.045Z",
+    "name":  "Trace Status Gauge",
+    "description":  "Gauge showing total trace count with status distribution",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "level"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+
+                ],
+    "chartType":  "NUMBER",
+    "chartConfig":  {
+                        "type":  "NUMBER"
+                    }
+}

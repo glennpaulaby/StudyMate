@@ -1,0 +1,42 @@
+{
+    "id":  "cmu306ceu000mpj07wpaotj1b",
+    "createdAt":  "2026-09-15T18:26:14.742Z",
+    "updatedAt":  "2026-09-15T18:28:19.599Z",
+    "name":  "Tool Success by Tool",
+    "description":  "Successful tool executions",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "name"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "any of",
+                        "value":  [
+                                      "TOOL"
+                                  ],
+                        "type":  "stringOptions"
+                    },
+                    {
+                        "column":  "level",
+                        "operator":  "any of",
+                        "value":  [
+                                      "DEFAULT"
+                                  ],
+                        "type":  "stringOptions"
+                    }
+                ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "PIE"
+                    }
+}

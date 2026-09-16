@@ -2,7 +2,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 # Ensure UTF-8 output encoding on Windows terminals to support emojis and Unicode symbols
 if sys.platform == "win32":
@@ -38,6 +38,7 @@ from study_agent.memory.rerank import InnKubeReranker, Reranker
 from study_agent.memory.store import MemoryStore
 from study_agent.memory.threads import generate_thread_name, resolve_thread
 from study_agent.memory.tools import register_memory_tools
+from study_agent.observability.events import build_permission_event
 from study_agent.observability.metrics import (
     init_metrics,
     observe_compaction,
@@ -47,6 +48,7 @@ from study_agent.observability.metrics import (
 from study_agent.observability.tracing import (
     append_trace,
     build_run_event,
+    export_langfuse_async,
     new_run_id,
 )
 from study_agent.study.griller import SocraticGriller
@@ -800,6 +802,29 @@ def run_cli(
     registry = tool_registry or ToolRegistry(
         policy=policy_from_config(app_config.permissions),
     )
+    # Per-turn permission decisions, batched into one permission:* trace
+    # event at turn end (mirrors the heartbeat fan-out below).
+    permission_buffer: List[PermissionEvent] = []
+
+    def _flush_permission_buffer() -> None:
+        if not permission_buffer:
+            return
+        if not (obs_cfg.metrics_enabled or obs_cfg.langfuse_enabled):
+            permission_buffer.clear()
+            return
+        batch, permission_buffer[:] = permission_buffer[:], []
+        try:
+            event = build_permission_event(batch, model=app_config.llm.model)
+            append_trace(obs_cfg.trace_file, event)
+            if obs_cfg.langfuse_enabled:
+                export_langfuse_async(
+                    event,
+                    host=obs_cfg.langfuse_host,
+                    public_key=obs_cfg.langfuse_public_key,
+                    secret_key=obs_cfg.langfuse_secret_key,
+                )
+        except Exception as e:
+            logger.debug(f"Permission trace skipped: {e}")
     # Shared holder so the confirmation handler can pause the thinking spinner
     # (its Live repaint erases the y/n prompt line; see make_confirmation_handler).
     spinner_ref: dict = {}
@@ -812,6 +837,7 @@ def run_cli(
                 f"executed={event.executed} rule={event.source}"
             )
             observe_permission(event.tool, event.decision.value)
+            permission_buffer.append(event)
 
         registry.on_permission_decision.append(_log_permission_event)
     project_root = Path.cwd().resolve()
@@ -839,7 +865,22 @@ def run_cli(
             )
 
     if "delegate_task" not in registry.tools:
-        register_delegation_tools(registry, client)
+        def _on_subagent(event) -> None:
+            append_trace(obs_cfg.trace_file, event)
+            if obs_cfg.langfuse_enabled:
+                export_langfuse_async(
+                    event,
+                    host=obs_cfg.langfuse_host,
+                    public_key=obs_cfg.langfuse_public_key,
+                    secret_key=obs_cfg.langfuse_secret_key,
+                )
+
+        register_delegation_tools(
+            registry,
+            client,
+            observability=app_config.observability,
+            on_subagent_run=_on_subagent,
+        )
     # MCP health heartbeat: periodic probes fanning out to Prometheus
     # gauges + Langfuse heartbeat traces (mcp-health:* observations).
     if obs_cfg.health_enabled and app_config.tools.mcp.enabled:
@@ -1256,9 +1297,11 @@ def run_cli(
                             # live span per run and already closed it with the
                             # error (true latency) before re-raising.
                         console.print(f"\n[bold red]Error during agent execution:[/bold red] {e}\n")
+                        _flush_permission_buffer()
                         continue
             finally:
                 spinner_ref.pop("live", None)
+            _flush_permission_buffer()
 
             if memory_store is not None and active_thread_id is not None:
                 try:

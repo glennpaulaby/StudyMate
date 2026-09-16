@@ -1,0 +1,131 @@
+{
+    "id":  "cmu2x4hta0002o907tdvwyixk",
+    "createdAt":  "2026-09-15T17:00:49.581Z",
+    "updatedAt":  "2026-09-15T21:12:08.666Z",
+    "name":  "Studymate Dashboard",
+    "description":  "Monitor agent tool usage: total tool calls, most-called tools, tool errors and latency, and observation type breakdowns.",
+    "definition":  {
+                       "widgets":  [
+                                       {
+                                           "type":  "widget",
+                                           "id":  "20d6ebcc-0b92-4cf1-92ff-934e13dbdc90",
+                                           "widgetId":  "cmu30c9lg000qpj073yzmn2c0",
+                                           "x":  0,
+                                           "y":  0,
+                                           "width":  3,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "11c3f92f-76f8-46c9-a89e-8211812dd6d9",
+                                           "widgetId":  "cmtdm68000003ad07afj8ag4o",
+                                           "x":  0,
+                                           "y":  4,
+                                           "width":  6,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "8c5d70ff-9ca1-4879-893f-187c5a62ea1d",
+                                           "widgetId":  "cmu2zwamw000ipj07t4632cvp",
+                                           "x":  6,
+                                           "y":  4,
+                                           "width":  3,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "7c8ecb81-c586-4819-8c5f-0cd2155fda2d",
+                                           "widgetId":  "cmu362tk8001hpj07wz58ls4g",
+                                           "x":  0,
+                                           "y":  8,
+                                           "width":  6,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "b82d4e57-3a19-4f06-9c3d-1a7e6f25c842",
+                                           "widgetId":  "cmu362l1z001fpj07bal7iyau",
+                                           "x":  6,
+                                           "y":  8,
+                                           "width":  6,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "3f6a1c2e-91b4-4c8a-a7d2-5e0b8c94d711",
+                                           "widgetId":  "cmu2zzpkx000kpj07hpclbtz6",
+                                           "x":  9,
+                                           "y":  0,
+                                           "width":  3,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "df9d14b2-0133-4d1c-a83a-f1437470fc0e",
+                                           "widgetId":  "cmtdm68000005ad07q12mamip",
+                                           "x":  0,
+                                           "y":  12,
+                                           "width":  6,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "5d1f8a03-6c2e-47b9-8e54-90ab37c1d6f2",
+                                           "widgetId":  "cmu3621aw001dpj07s0dnr2un",
+                                           "x":  6,
+                                           "y":  12,
+                                           "width":  6,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "fb810255-b7ba-4fd3-9102-75ccf52081b2",
+                                           "widgetId":  "cmu2zj5w6000dpj07ugkmsthr",
+                                           "x":  9,
+                                           "y":  4,
+                                           "width":  3,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "8ce803f2-58d7-46e1-b03b-9d74e7432c52",
+                                           "widgetId":  "cmu306ceu000mpj07wpaotj1b",
+                                           "x":  6,
+                                           "y":  0,
+                                           "width":  3,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "eeddbeec-53ef-400b-9e95-227a8c4a8758",
+                                           "widgetId":  "cmu309rpt000opj07ky7g3pvl",
+                                           "x":  3,
+                                           "y":  0,
+                                           "width":  3,
+                                           "height":  4
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "8011b498-e717-4cea-894e-242c4101f742",
+                                           "widgetId":  "cmu334b8o000xpj07ryw3zrwe",
+                                           "x":  0,
+                                           "y":  16,
+                                           "width":  6,
+                                           "height":  6
+                                       },
+                                       {
+                                           "type":  "widget",
+                                           "id":  "a0a4c593-9341-4501-a314-7eab53c7a667",
+                                           "widgetId":  "cmu35q4xg0014pj07jzn28f1c",
+                                           "x":  6,
+                                           "y":  16,
+                                           "width":  6,
+                                           "height":  6
+                                       }
+                                   ]
+                   },
+    "filters":  [
+
+                ]
+}

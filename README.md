@@ -291,7 +291,7 @@ Goodbye and happy studying! 🎓
 
 ## Testing
 
-Execute the automated test suite with pytest (233 unit and E2E tests; 3 external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
+Execute the automated test suite with pytest (250 unit and E2E tests; 3 external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
 ```bash
 # Run all tests
 pytest

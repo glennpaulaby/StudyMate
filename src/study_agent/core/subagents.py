@@ -112,6 +112,11 @@ class SubagentRegistry:
                 child_tools.policy = base_registry.policy
             if base_registry.confirmation_handler is not None:
                 child_tools.confirmation_handler = base_registry.confirmation_handler
+            # Inherit permission-decision listeners so child gating stays
+            # visible to the parent's monitors (REPL batching, Prometheus).
+            child_tools.on_permission_decision.extend(
+                base_registry.on_permission_decision
+            )
 
         from study_agent.core.engine import AgentEngine
 

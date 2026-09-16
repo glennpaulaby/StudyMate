@@ -1,3 +1,11 @@
+from study_agent.observability.events import (
+    PERMISSION_THREAD_ID,
+    PERMISSION_THREAD_NAME,
+    SUBAGENT_THREAD_ID,
+    SUBAGENT_THREAD_NAME,
+    build_permission_event,
+    build_subagent_event,
+)
 from study_agent.observability.metrics import (
     init_metrics,
     is_enabled,
@@ -22,6 +30,12 @@ from study_agent.observability.tracing import (
 )
 
 __all__ = [
+    "PERMISSION_THREAD_ID",
+    "PERMISSION_THREAD_NAME",
+    "SUBAGENT_THREAD_ID",
+    "SUBAGENT_THREAD_NAME",
+    "build_permission_event",
+    "build_subagent_event",
     "init_metrics",
     "is_enabled",
     "latest_metrics_text",

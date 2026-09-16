@@ -1,0 +1,32 @@
+{
+    "id":  "cmu2z79e00001pj07c8mbnzbp",
+    "createdAt":  "2026-09-15T17:58:57.864Z",
+    "updatedAt":  "2026-09-15T18:00:05.664Z",
+    "name":  "Span Error vs Success",
+    "description":  "Count of span observations by error level (ERROR vs non-ERROR)",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "level"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "=",
+                        "value":  "SPAN",
+                        "type":  "string"
+                    }
+                ],
+    "chartType":  "VERTICAL_BAR",
+    "chartConfig":  {
+                        "row_limit":  100,
+                        "type":  "VERTICAL_BAR"
+                    }
+}

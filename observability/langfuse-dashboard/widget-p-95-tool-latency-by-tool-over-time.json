@@ -1,0 +1,33 @@
+{
+    "id":  "cmu3621aw001dpj07s0dnr2un",
+    "createdAt":  "2026-09-15T21:10:51.415Z",
+    "updatedAt":  "2026-09-15T21:11:45.087Z",
+    "name":  "P 95 Tool Latency by Tool (over time)",
+    "description":  "P95 execution latency of TOOL observations over time, one series per tool",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "name"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "latency",
+                        "agg":  "p95"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "any of",
+                        "value":  [
+                                      "TOOL"
+                                  ],
+                        "type":  "stringOptions"
+                    }
+                ],
+    "chartType":  "LINE_TIME_SERIES",
+    "chartConfig":  {
+                        "type":  "LINE_TIME_SERIES"
+                    }
+}

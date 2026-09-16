@@ -1,0 +1,32 @@
+{
+    "id":  "cmu30c9lg000qpj073yzmn2c0",
+    "createdAt":  "2026-09-15T18:30:51.028Z",
+    "updatedAt":  "2026-09-15T21:08:20.830Z",
+    "name":  "Total Tool Calls",
+    "description":  "Total number of tool calls across observations, including parallel tool calls within a single observation",
+    "view":  "observations",
+    "dimensions":  [
+
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "any of",
+                        "value":  [
+                                      "TOOL"
+                                  ],
+                        "type":  "stringOptions"
+                    }
+                ],
+    "chartType":  "NUMBER",
+    "chartConfig":  {
+                        "row_limit":  100,
+                        "type":  "NUMBER"
+                    }
+}

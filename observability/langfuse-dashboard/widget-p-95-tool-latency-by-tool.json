@@ -1,0 +1,34 @@
+{
+    "id":  "cmu362l1z001fpj07bal7iyau",
+    "createdAt":  "2026-09-15T21:11:17.015Z",
+    "updatedAt":  "2026-09-15T21:11:19.622Z",
+    "name":  "P 95 Tool Latency by Tool",
+    "description":  "P95 execution latency of TOOL observations per tool, limited to the top 20",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "name"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "latency",
+                        "agg":  "p95"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "any of",
+                        "value":  [
+                                      "TOOL"
+                                  ],
+                        "type":  "stringOptions"
+                    }
+                ],
+    "chartType":  "HORIZONTAL_BAR",
+    "chartConfig":  {
+                        "row_limit":  20,
+                        "type":  "HORIZONTAL_BAR"
+                    }
+}

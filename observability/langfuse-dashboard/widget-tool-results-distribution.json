@@ -1,0 +1,45 @@
+{
+    "id":  "cmu309rpt000opj07ky7g3pvl",
+    "createdAt":  "2026-09-15T18:28:54.545Z",
+    "updatedAt":  "2026-09-15T21:08:28.289Z",
+    "name":  "Tool Results Distribution",
+    "description":  "Distribution of Tool Call Results",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "level"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "any of",
+                        "value":  [
+                                      "TOOL"
+                                  ],
+                        "type":  "stringOptions"
+                    },
+                    {
+                        "column":  "level",
+                        "operator":  "any of",
+                        "value":  [
+                                      "WARNING",
+                                      "ERROR",
+                                      "DEBUG",
+                                      "DEFAULT"
+                                  ],
+                        "type":  "stringOptions"
+                    }
+                ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "PIE"
+                    }
+}

@@ -1,0 +1,42 @@
+{
+    "id":  "cmu2zzpkx000kpj07hpclbtz6",
+    "createdAt":  "2026-09-15T18:21:05.217Z",
+    "updatedAt":  "2026-09-15T21:08:50.096Z",
+    "name":  "Tool Errors by Tool",
+    "description":  "Failed tool executions (ERROR level) per tool",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "name"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "any of",
+                        "value":  [
+                                      "TOOL"
+                                  ],
+                        "type":  "stringOptions"
+                    },
+                    {
+                        "column":  "level",
+                        "operator":  "any of",
+                        "value":  [
+                                      "ERROR"
+                                  ],
+                        "type":  "stringOptions"
+                    }
+                ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "PIE"
+                    }
+}

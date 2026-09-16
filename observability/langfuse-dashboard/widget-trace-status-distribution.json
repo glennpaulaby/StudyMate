@@ -1,0 +1,27 @@
+{
+    "id":  "cmu2zj5w6000dpj07ugkmsthr",
+    "createdAt":  "2026-09-15T18:08:13.206Z",
+    "updatedAt":  "2026-09-15T21:09:12.100Z",
+    "name":  "Trace Status Distribution",
+    "description":  "Distribution of trace statuses across all observations",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "level"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+
+                ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "PIE"
+                    }
+}

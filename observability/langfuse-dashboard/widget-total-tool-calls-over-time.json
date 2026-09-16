@@ -1,0 +1,24 @@
+{
+    "id":  "cmu362tk8001hpj07wz58ls4g",
+    "createdAt":  "2026-09-15T21:11:28.040Z",
+    "updatedAt":  "2026-09-15T21:11:33.848Z",
+    "name":  "Total Tool Calls (over time)",
+    "description":  "Tool call volume over time, including parallel tool calls within a single observation",
+    "view":  "observations",
+    "dimensions":  [
+
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "toolCalls",
+                        "agg":  "sum"
+                    }
+                ],
+    "filters":  [
+
+                ],
+    "chartType":  "BAR_TIME_SERIES",
+    "chartConfig":  {
+                        "type":  "BAR_TIME_SERIES"
+                    }
+}

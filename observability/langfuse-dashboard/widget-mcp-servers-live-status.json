@@ -1,0 +1,42 @@
+{
+    "id":  "cmu32mixn000spj0790rc1kq6",
+    "createdAt":  "2026-09-15T19:34:48.924Z",
+    "updatedAt":  "2026-09-15T20:25:54.454Z",
+    "name":  "MCP servers live status",
+    "description":  "Per-tool MCP calls split by level (DEFAULT = ok, ERROR = failing). A tool with only ERROR rows or no rows at all is not live.",
+    "view":  "observations",
+    "dimensions":  [
+                       {
+                           "field":  "name"
+                       },
+                       {
+                           "field":  "level"
+                       }
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+                    {
+                        "column":  "type",
+                        "operator":  "=",
+                        "value":  "TOOL",
+                        "type":  "string"
+                    },
+                    {
+                        "type":  "stringObject",
+                        "column":  "metadata",
+                        "key":  "source",
+                        "operator":  "=",
+                        "value":  "mcp"
+                    }
+                ],
+    "chartType":  "PIVOT_TABLE",
+    "chartConfig":  {
+                        "row_limit":  100,
+                        "type":  "PIVOT_TABLE"
+                    }
+}

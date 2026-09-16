@@ -1,0 +1,25 @@
+{
+    "id":  "cmu2zb8dn0005pj07qscfx1pe",
+    "createdAt":  "2026-09-15T18:02:03.178Z",
+    "updatedAt":  "2026-09-15T18:10:02.298Z",
+    "name":  "Trace Pie Chart",
+    "description":  "Pie Chart showing total trace count with status distribution",
+    "view":  "observations",
+    "dimensions":  [
+
+                   ],
+    "metrics":  [
+                    {
+                        "measure":  "count",
+                        "agg":  "count"
+                    }
+                ],
+    "filters":  [
+
+                ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  100,
+                        "type":  "PIE"
+                    }
+}
