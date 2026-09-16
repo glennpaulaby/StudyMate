@@ -1,0 +1,32 @@
+{
+    "id":  "cmu502subtime0000000000005",
+    "createdAt":  "2026-09-16T21:00:00.000Z",
+    "updatedAt":  "2026-09-16T21:00:00.000Z",
+    "name":  "Subagent runs over time",
+    "description":  "Subagent ok vs fail over time. Right edge = now.",
+    "view":  "observations",
+    "dimensions":  [
+                        {
+                            "field":  "level"
+                        }
+                    ],
+    "metrics":  [
+                     {
+                         "measure":  "count",
+                         "agg":  "count"
+                     }
+                 ],
+    "filters":  [
+                     {
+                         "column":  "name",
+                         "operator":  "contains",
+                         "value":  "subagent:",
+                         "type":  "string"
+                     }
+                 ],
+    "chartType":  "BAR_TIME_SERIES",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "BAR_TIME_SERIES"
+                    }
+}

@@ -1,0 +1,32 @@
+{
+    "id":  "cmu502permit00000000000006",
+    "createdAt":  "2026-09-16T21:00:00.000Z",
+    "updatedAt":  "2026-09-16T21:00:00.000Z",
+    "name":  "Permission decisions",
+    "description":  "Decisions per tool. Narrow range for recent.",
+    "view":  "observations",
+    "dimensions":  [
+                        {
+                            "field":  "name"
+                        }
+                    ],
+    "metrics":  [
+                     {
+                         "measure":  "count",
+                         "agg":  "count"
+                     }
+                 ],
+    "filters":  [
+                     {
+                         "column":  "name",
+                         "operator":  "contains",
+                         "value":  "permission:",
+                         "type":  "string"
+                     }
+                 ],
+    "chartType":  "PIE",
+    "chartConfig":  {
+                        "row_limit":  100,
+                        "type":  "PIE"
+                    }
+}

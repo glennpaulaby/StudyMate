@@ -8,7 +8,11 @@ from study_agent.observability.events import (
     PERMISSION_THREAD_NAME,
     build_permission_event,
 )
-from study_agent.security.policy import Decision, PermissionEvent
+from study_agent.security.policy import (
+    SESSION_ALWAYS_TIER,
+    Decision,
+    PermissionEvent,
+)
 
 
 def _event(tool="write_file", decision=Decision.ALLOW, executed=True, source="sandbox-edit"):
@@ -43,8 +47,18 @@ def test_build_permission_event_schema():
         "executed": True,
         "rule": "sandbox-edit",
     }
-    assert by_name["permission:web_search"]["status"] == "error"
-    assert by_name["permission:web_search"]["arguments"]["decision"] == "deny"
+    assert by_name["permission:denied:web_search"]["status"] == "error"
+    assert by_name["permission:denied:web_search"]["arguments"]["decision"] == "deny"
+
+
+def test_session_always_calls_get_their_own_names():
+    """Verify 'always'-approved calls group separately for widgets."""
+    event = build_permission_event(
+        [_event(decision=Decision.ALLOW, executed=True, source=SESSION_ALWAYS_TIER)],
+        model="m",
+    )
+    assert [r["name"] for r in event["tools"]] == ["permission:always:write_file"]
+    assert event["tools"][0]["status"] == "ok"
 
 
 def test_build_permission_event_empty_batch():
