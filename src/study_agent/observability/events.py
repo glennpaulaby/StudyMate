@@ -4,7 +4,7 @@ Heartbeat-style events — one JSONL line + one Langfuse trace each — for
 concerns that live outside any single agent run:
 
 - subagent delegations (``subagent:<name>`` tool records, this module),
-- permission decisions (``permission:<tool>`` records, Phase 2).
+- permission decisions (``permission:*`` records, Phase 2).
 
 Widgets filter by name prefix, mirroring the ``mcp-health:*`` convention
 in ``health.py``. Builders are pure (no I/O); callers fan out via
@@ -14,7 +14,7 @@ in ``health.py``. Builders are pure (no I/O); callers fan out via
 from typing import Any, Dict, List
 
 from study_agent.observability.tracing import build_run_event, new_run_id
-from study_agent.security.policy import PermissionEvent
+from study_agent.security.policy import SESSION_ALWAYS_TIER, PermissionEvent
 
 SUBAGENT_THREAD_ID = "subagent-runs"
 SUBAGENT_THREAD_NAME = "Subagent delegations"
@@ -85,20 +85,40 @@ __all__ = [
 ]
 
 
+def _permission_observation_name(d: PermissionEvent) -> str:
+    """Names one permission record for dashboard breakdowns.
+
+    Langfuse tiles get a single breakdown dimension, so the outcome rides
+    in the name: denied calls and session-"always" calls each group under
+    their own prefix while keeping the shared ``permission:`` head that
+    existing prefix filters match on.
+    """
+    if not d.executed:
+        return f"permission:denied:{d.tool}"
+    if d.source == SESSION_ALWAYS_TIER:
+        return f"permission:always:{d.tool}"
+    return f"permission:{d.tool}"
+
+
 def build_permission_event(
     decisions: List[PermissionEvent], *, model: str = ""
 ) -> Dict[str, Any]:
     """Builds one batched permission-decision event for a turn.
 
-    Each gated tool call becomes a ``permission:<tool>`` record carrying
+    Each gated tool call becomes a ``permission:*`` record carrying
     the decision, whether it executed, and the matched rule — widgets
     filter by name prefix and slice by ``decision``. Recording always
     succeeds as an event (``status="success"``); refusals surface per
     record (``executed=false`` → ``status="error"``).
+
+    The outcome is encoded in the record name so dashboard tiles can split
+    it without a second dimension: ``permission:denied:<tool>`` for refused
+    calls, ``permission:always:<tool>`` for calls covered by a session-scoped
+    "always", plain ``permission:<tool>`` otherwise.
     """
     records = [
         {
-            "name": f"permission:{d.tool}",
+            "name": _permission_observation_name(d),
             "source": "permission",
             "server": "",
             "duration_ms": 0.0,

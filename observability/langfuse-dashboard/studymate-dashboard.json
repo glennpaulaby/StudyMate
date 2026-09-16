@@ -103,27 +103,45 @@
                                            "x":  3,
                                            "y":  0,
                                            "width":  3,
-                                           "height":  4
-                                       },
-                                       {
-                                           "type":  "widget",
-                                           "id":  "8011b498-e717-4cea-894e-242c4101f742",
-                                           "widgetId":  "cmu334b8o000xpj07ryw3zrwe",
-                                           "x":  0,
-                                           "y":  16,
-                                           "width":  6,
-                                           "height":  6
-                                       },
-                                       {
-                                           "type":  "widget",
-                                           "id":  "a0a4c593-9341-4501-a314-7eab53c7a667",
-                                           "widgetId":  "cmu35q4xg0014pj07jzn28f1c",
-                                           "x":  6,
-                                           "y":  16,
-                                           "width":  6,
-                                           "height":  6
-                                       }
-                                   ]
+                                            "height":  4
+                                        },
+                                        {
+                                            "type":  "widget",
+                                            "id":  "e73f4cc3-9a5b-4e8c-b2d4-f6a7b8c9d0e1",
+                                            "widgetId":  "cmu501mcptime000000000003",
+                                            "x":  0,
+                                            "y":  16,
+                                            "width":  12,
+                                            "height":  6
+                                        },
+                                        {
+                                            "type":  "widget",
+                                            "id":  "a25b6cc5-3d7e-4f9f-b4c6-d8e9f0a1b2c3",
+                                            "widgetId":  "cmu502permit00000000000006",
+                                            "x":  0,
+                                            "y":  22,
+                                            "width":  12,
+                                            "height":  5
+                                        },
+                                        {
+                                            "type":  "widget",
+                                            "id":  "b36c7dd6-4e8f-4f9f-c5d7-e9f0a1b2c3d4",
+                                            "widgetId":  "cmu502subtime0000000000005",
+                                            "x":  0,
+                                            "y":  27,
+                                            "width":  6,
+                                            "height":  5
+                                        },
+                                        {
+                                            "type":  "widget",
+                                            "id":  "c47d8ee7-5f9f-4faf-d6e8-f0a1b2c3d4e5",
+                                            "widgetId":  "cmu502permtime000000000007",
+                                            "x":  6,
+                                            "y":  27,
+                                            "width":  6,
+                                            "height":  5
+                                        }
+                                    ]
                    },
     "filters":  [
 

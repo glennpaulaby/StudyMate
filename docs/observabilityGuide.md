@@ -65,6 +65,13 @@ the volumes went with the wipe: sign up, create org + project, get fresh keys,
 update `.env` (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`), and you're done —
 no code changes needed.
 
+Then provision the dashboard (the scoped boots above never start the
+one-shot provisioner, so without this there are traces but no dashboard):
+
+```powershell
+docker compose up provision-dashboard   # expect provision-dashboard: OK
+```
+
 ## 6. Sessions: local vs. container
 
 - **Local:** `studymate` from the venv — uses your repo `workspace/` and
@@ -129,6 +136,10 @@ Fresh-machine flow: sign up at :3000 → create project → backfill
 `LANGFUSE_PUBLIC_KEY/SECRET_KEY` in `.env` → `up` again (or run the
 one-liner above). Two tiles reference since-deleted widgets and are
 skipped with a WARNING — recreate them by hand if wanted.
+
+Viewing note: the `MCP servers status over time` tile aggregates the
+selected window — set the dashboard time picker to Last 30 min for
+now-state (empty right edge = all UP, bars at the edge = DOWN).
 
 Hand-built widget workflow (yours stay portable): build/edit widgets in
 the UI as usual, then re-export into the repo so the next provision

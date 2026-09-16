@@ -1,0 +1,38 @@
+{
+    "id":  "cmu501mcptime000000000003",
+    "createdAt":  "2026-09-16T19:00:00.000Z",
+    "updatedAt":  "2026-09-16T20:00:00.000Z",
+    "name":  "MCP servers status over time",
+    "description":  "Failed ticks per server. Right edge: empty = all UP, bars = DOWN.",
+    "view":  "observations",
+    "dimensions":  [
+                        {
+                            "field":  "name"
+                        }
+                    ],
+    "metrics":  [
+                     {
+                         "measure":  "count",
+                         "agg":  "count"
+                     }
+                 ],
+    "filters":  [
+                     {
+                         "column":  "name",
+                         "operator":  "contains",
+                         "value":  "mcp-health",
+                         "type":  "string"
+                     },
+                     {
+                         "column":  "level",
+                         "operator":  "=",
+                         "value":  "ERROR",
+                         "type":  "string"
+                     }
+                 ],
+    "chartType":  "BAR_TIME_SERIES",
+    "chartConfig":  {
+                        "row_limit":  1000,
+                        "type":  "BAR_TIME_SERIES"
+                    }
+}

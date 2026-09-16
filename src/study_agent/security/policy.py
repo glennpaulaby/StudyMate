@@ -20,6 +20,11 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+#: Rule tier stamped on calls approved via a user's session-scoped "always".
+#: The observability layer keys its ``permission:always:<tool>`` observation
+#: names off this (import it; never retype the string).
+SESSION_ALWAYS_TIER = "session-always"
+
 
 class Decision(str, Enum):
     """The three permission outcomes required by the Week 3 spec."""
@@ -121,7 +126,7 @@ class PermissionPolicy:
         """Resolves the decision for one tool call. Pure; no side effects."""
         if name in self._session_allow:
             return PermissionDecision(
-                decision=Decision.ALLOW, rule=Rule(tools=[name], decision=Decision.ALLOW, tier="session-always")
+                decision=Decision.ALLOW, rule=Rule(tools=[name], decision=Decision.ALLOW, tier=SESSION_ALWAYS_TIER)
             )
         for rule in self.rules:
             if rule.matches(name, arguments):
