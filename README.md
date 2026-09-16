@@ -29,7 +29,8 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
     over stdio. The model can search current sources and fetch pages for multi-step
     deep research.
   - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`,
-    `obsidian_edit_note`, and `obsidian_append_note` support filesystem-first note-taking,
+    `obsidian_edit_note`, `obsidian_append_note`, `obsidian_get_outgoing_links`,
+    `obsidian_get_backlinks`, and `obsidian_insert_into_section` support filesystem-first note-taking,
     including anchored edits and `[[wikilinks]]`, without deletion.
 
 ---
@@ -82,13 +83,13 @@ project/group-11/
 │   └── study_agent/
 │       ├── cli/                # Terminal interactive REPL (studymate)
 │       ├── config/             # Configuration schemas and YAML/env loader
-│       ├── core/               # ReAct loop, context manager, and state machine
+│       ├── core/               # ReAct loop, context manager, compaction, subagents, state machine
 │       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
 │       ├── tools/              # Tool registry, filesystem/PDF tools, and MCP capabilities
 │       │   └── mcp/            # External web-search bridge + Obsidian MCP server
 │       ├── study/              # Obsidian templates, VaultLinter, SocraticGriller, Procedures
-│       ├── memory/             # SQLite threads/facts + sqlite-vector + reranker + compaction
-│       ├── observability/      # Metrics + tracing modules (metrics.py, tracing.py)
+│       ├── memory/             # SQLite threads/facts + sqlite-vector + reranker
+│       ├── observability/      # Metrics + tracing + events + health (metrics.py, tracing.py, events.py, health.py)
 │       ├── security/           # Multi-tier permission management (Week 3)
 │       └── subagents/          # Specialized sub-agent coordination (Week 3)
 ├── observability/              # Prometheus scrape config + rules (committed)
@@ -157,7 +158,8 @@ if it just needs to exist and match on both ends, generate it. `.env` is
 gitignored — never commit it.
 
 ### 4. Add Your Study Materials
-`workspace/data/` and `workspace/artifacts/` aren't tracked in git (they start empty), so on a fresh
+`workspace/data/` and `workspace/artifacts/` aren't tracked in git (they start empty, except
+committed `workspace/artifacts/procedures/`), so on a fresh
 clone you need to create them yourself before running StudyMate locally (the Docker image creates them
 automatically at build time):
 ```bash
@@ -180,11 +182,12 @@ $env:OBSIDIAN_VAULT_PATH = "C:\path\to\your\vault"
 python -m study_agent.tools.mcp.server
 ```
 
-Web search is provided by the external DuckDuckGo MCP server and is started on
-demand by StudyMate with `uvx`. Install `uv` first (`pip install uv`) or set
-`tools.mcp.search_command` and `tools.mcp.search_args` in `config/config.yaml`
-to another launcher. The default uses the optional browser backend to improve
-DuckDuckGo compatibility:
+Web search is provided by the external DuckDuckGo MCP server, prebaked into the image
+at `/opt/mcp/ddg/bin` (`Dockerfile`) and spawned by bare command name
+(`tools.mcp.search_command: "duckduckgo-mcp-server"`, `search_args: []` in
+`config/config.yaml`). On a host without the bake-in, install `uv` first
+(`pip install uv`) or set `tools.mcp.search_command` and `tools.mcp.search_args`
+in `config/config.yaml` to another launcher. Fallback via `uvx`:
 
 ```yaml
 tools:
@@ -291,7 +294,7 @@ Goodbye and happy studying! 🎓
 
 ## Testing
 
-Execute the automated test suite with pytest (250 unit and E2E tests; 3 external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
+Execute the automated test suite with pytest (253 unit and E2E tests collected; external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
 ```bash
 # Run all tests
 pytest
