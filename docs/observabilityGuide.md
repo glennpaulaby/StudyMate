@@ -130,6 +130,10 @@ Fresh-machine flow: sign up at :3000 → create project → backfill
 one-liner above). Two tiles reference since-deleted widgets and are
 skipped with a WARNING — recreate them by hand if wanted.
 
+Viewing note: the `MCP servers status over time` tile aggregates the
+selected window — set the dashboard time picker to Last 30 min for
+now-state (empty right edge = all UP, bars at the edge = DOWN).
+
 Hand-built widget workflow (yours stay portable): build/edit widgets in
 the UI as usual, then re-export into the repo so the next provision
 carries them everywhere — per widget/dashboard, UI ⋯ menu → Download
