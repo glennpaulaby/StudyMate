@@ -91,16 +91,22 @@ def test_run_llm_tool_memory_compaction_series(enabled_metrics):
 
 def test_teammate_contract_hooks(enabled_metrics):
     """Verify permission/sub-agent owners emit into the frozen contract names."""
+    before = enabled_metrics.latest_metrics_text()
+    p_allow = _series_value_or_zero(before, "studymate_permission_decisions_total", 'decision="allow",tool="write_file"')
+    p_deny = _series_value_or_zero(before, "studymate_permission_decisions_total", 'decision="deny",tool="web_search"')
+    sub_res = _series_value_or_zero(before, "studymate_subagent_runs_total", 'config="researcher",status="success"')
+    sub_wri = _series_value_or_zero(before, "studymate_subagent_runs_total", 'config="writer",status="error"')
+
     enabled_metrics.observe_permission("write_file", "allow")
     enabled_metrics.observe_permission("web_search", "deny")
     enabled_metrics.observe_subagent("researcher", "success")
     enabled_metrics.observe_subagent("writer", "error")
 
     text = enabled_metrics.latest_metrics_text()
-    assert _series_value(text, "studymate_permission_decisions_total", 'decision="allow",tool="write_file"') == 1.0
-    assert _series_value(text, "studymate_permission_decisions_total", 'decision="deny",tool="web_search"') == 1.0
-    assert _series_value(text, "studymate_subagent_runs_total", 'config="researcher",status="success"') == 1.0
-    assert _series_value(text, "studymate_subagent_runs_total", 'config="writer",status="error"') == 1.0
+    assert _series_value(text, "studymate_permission_decisions_total", 'decision="allow",tool="write_file"') == p_allow + 1.0
+    assert _series_value(text, "studymate_permission_decisions_total", 'decision="deny",tool="web_search"') == p_deny + 1.0
+    assert _series_value(text, "studymate_subagent_runs_total", 'config="researcher",status="success"') == sub_res + 1.0
+    assert _series_value(text, "studymate_subagent_runs_total", 'config="writer",status="error"') == sub_wri + 1.0
 
 
 def test_tool_source_tiers():
@@ -137,6 +143,9 @@ def test_registry_execute_observes_statuses(tmp_path, enabled_metrics):
     from study_agent.tools.base import ToolRegistry
     from study_agent.tools.filesystem import register_filesystem_tools
 
+    before = enabled_metrics.latest_metrics_text()
+    prev_not_found = _series_value_or_zero(before, "studymate_tool_calls_total", 'source="builtin",status="not_found",tool="no_such_tool"')
+
     workspace = tmp_path / "workspace"
     (workspace / "artifacts").mkdir(parents=True)
     registry = ToolRegistry()
@@ -153,7 +162,7 @@ def test_registry_execute_observes_statuses(tmp_path, enabled_metrics):
 
     text = enabled_metrics.latest_metrics_text()
     assert _series_value(text, "studymate_tool_calls_total", 'source="builtin",status="ok",tool="list_files"') >= 1.0
-    assert _series_value(text, "studymate_tool_calls_total", 'source="builtin",status="not_found",tool="no_such_tool"') == 1.0
+    assert _series_value(text, "studymate_tool_calls_total", 'source="builtin",status="not_found",tool="no_such_tool"') == prev_not_found + 1.0
 
 
 def test_trace_event_schema_and_append(tmp_path):
