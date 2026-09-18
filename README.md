@@ -32,6 +32,18 @@ StudyMate operates directly from the terminal via an interactive CLI (`studymate
     `obsidian_edit_note`, `obsidian_append_note`, `obsidian_get_outgoing_links`,
     `obsidian_get_backlinks`, and `obsidian_insert_into_section` support filesystem-first note-taking,
     including anchored edits and `[[wikilinks]]`, without deletion.
+- **Specialized Subagents & Task Delegation (`delegate_task`)**:
+  - Spawns isolated child `AgentEngine` instances with restricted toolsets and iteration caps:
+    - **`examiner`**: Dedicated active-recall sparring partner equipped only with read-only tools (`read_file`, `obsidian_get_backlinks`, `memory_recall`) to prevent note/frontmatter corruption.
+    - **`researcher`**: Dedicated deep-dive literature and technical benchmark exploration subagent (`research_topic`) that keeps massive web crawls from polluting the main session's context.
+  - Linked telemetry: child execution traces carry `parent_run_id` for end-to-end trace correlation in Langfuse and Prometheus.
+- **Multi-Tier Permission System (`/permissions`)**:
+  - Configurable policy gate evaluated in `ToolRegistry` (`allow`, `deny`, `require-user-confirmation`).
+  - Interactive terminal prompt (`y`/`n`/`always`) with fail-closed security for non-interactive environments.
+- **Live Observability & Health Monitoring**:
+  - Prometheus `/metrics` served on port `:8000` (runs, tokens, tool latencies, memory ops, permission decisions, subagent runs).
+  - Background 60s MCP health heartbeat (`studymate_mcp_up`, `studymate_mcp_probe_duration_seconds`) with silenced subprocess logging.
+  - Self-hosted Langfuse dashboard with automatic widget provisioning (`studymate-dashboard.json`).
 
 ---
 
@@ -294,24 +306,32 @@ Goodbye and happy studying! 🎓
 
 ## Testing
 
-Execute the automated test suite with pytest (253 unit and E2E tests collected; external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
+Execute the automated test suite with pytest (261 unit and E2E tests collected with 100% pass rate; external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
 ```bash
 # Run all tests
 pytest
 
 # Or via uv:
-uv run --with pytest --with pytest-mock pytest
+uv run --python 3.12 --extra dev pytest
 ```
 
 ---
 
 ## Containerization (Docker)
 
-To execute StudyMate inside an isolated Debian-based container (`python:3.12-slim-bookworm`):
+To execute StudyMate and its observability stack inside an isolated Debian-based container (`python:3.12-slim-bookworm`):
 
 ### Option A: Using Docker Compose (Recommended)
 ```bash
-docker compose run --rm studymate
+# 1. Pull and build the StudyMate container image
+docker compose pull
+docker compose build studymate
+
+# 2. Boot backends, Prometheus, Langfuse, and auto-provision dashboard widgets
+docker compose up -d postgres redis clickhouse minio langfuse-web langfuse-worker prometheus provision-dashboard
+
+# 3. Launch the interactive StudyMate REPL inside the sandboxed container
+docker compose run --rm --service-ports studymate
 ```
 
 ### Option B: Using Standard Docker CLI
@@ -336,14 +356,16 @@ docker run -it --rm \
   - Sandboxed tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`, `rename_file`)
   - Strict security boundaries (workspace path jail, read-only data, delete strictly prohibited)
   - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
-  - 58 unit & E2E tests (covering `numbers_in_words`, `find_and_inspect`, the CLI REPL, and study ingestion workflows)
+  - 58 unit & E2E tests covering core tool execution and study ingestion workflows
   - Containerization with `Dockerfile` and `compose.yaml`
 - [x] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
-  - Internet research aggregation and safe Obsidian vault MCP tools
-  - Local ToolRegistry bridge for agent access plus stdio MCP server
-  - Dynamic MCP client integration and persistent long-term memory remain next steps
-  - Persistent long-term memory across sessions
+  - Internet research aggregation (`web_search`, `fetch_web_content`) via stdio MCP bridge
+  - Safe Obsidian vault MCP tools (`obsidian_*`) with anchored section edits
+  - Long-term memory store (SQLite threads + facts) with `sqlite-vector` cosine search and InnKube reranker (`memory_recall`)
+  - Reusable procedural memory bundles (`workspace/artifacts/procedures/`)
+  - Automatic and on-demand context compaction (`/compact`)
 - [x] **Week 3: Observability, Permissions, and Sub-Agents**
   - [x] Prometheus metrics + Langfuse trace export (`studymate_*` series, `observability/` scrape config + rules)
   - [x] Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`) — policy gate in `ToolRegistry`, YAML rules (first match wins, fail-closed default), interactive `y/n/always`, `/permissions`, decision events on a hook seam for Prometheus
   - [x] Specialized sub-agents with task delegation on the same harness (`SubagentRegistry`, `DelegateTaskTool`, pre-configured `examiner` for Socratic grilling with read-only tools and `researcher` for literature analysis, context isolation, and `parent_run_id` telemetry tracking)
+  - [x] Periodic background MCP health heartbeat with silenced subprocess logging and real-time dashboard widgets

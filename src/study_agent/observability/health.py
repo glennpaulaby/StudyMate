@@ -51,11 +51,14 @@ async def _list_bridge_tools(
     command: str, args: List[str], env: Dict[str, str], timeout_s: float
 ) -> List[str]:
     """Opens one MCP session, lists remote tools, closes it."""
+    import subprocess
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
     server = StdioServerParameters(command=command, args=list(args), env=dict(env))
-    async with stdio_client(server) as (read_stream, write_stream), ClientSession(
+    async with stdio_client(
+        server, errlog=subprocess.DEVNULL
+    ) as (read_stream, write_stream), ClientSession(
         read_stream, write_stream
     ) as session:
         await session.initialize()
@@ -73,12 +76,18 @@ def probe_external_bridge(
     import os
 
     start = time.perf_counter()
+    merged_env = {
+        **os.environ.copy(),
+        "LOG_LEVEL": "ERROR",
+        "PYTHONWARNINGS": "ignore",
+        **(env or {}),
+    }
     try:
         names = asyncio.run(
             _list_bridge_tools(
                 command,
                 args if args is not None else [],
-                {**os.environ.copy(), **(env or {})},
+                merged_env,
                 timeout_s,
             )
         )

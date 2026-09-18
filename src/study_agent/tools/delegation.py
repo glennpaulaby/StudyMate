@@ -44,7 +44,9 @@ class DelegateTaskTool(BaseTool):
         names_str = ", ".join(names) if names else "examiner, researcher"
         return (
             f"Delegates a specialized academic sub-task to a child subagent ({names_str}). "
-            "Spawns an isolated subagent engine and returns its final assessment or synthesis."
+            "ONLY invoke this tool when the user explicitly requests subagent delegation or asks for a "
+            "specialized child agent (e.g. 'researcher', 'examiner'). "
+            "Do not invoke this tool for general questions unless the user explicitly requests subagent delegation."
         )
 
     @property
