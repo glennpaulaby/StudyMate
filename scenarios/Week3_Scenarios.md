@@ -37,117 +37,80 @@ What it looks like with data:
 
 ---
 
-## Subagent Delegation, Permission Gating & Linked Traces
+## Specialized Subagent Delegation Scenario
 
-This walkthrough demonstrates StudyMate's specialized subagent delegation pattern under permission control, verifying context isolation and end-to-end observability linkage.
+This scenario demonstrates StudyMate's autonomous subagent delegation, permission gating, and context isolation in action.
 
 ### 1. Scenario Overview
 
-- **Student Query**: *"Can you run an in-depth comparative benchmark of FlashAttention vs. Standard Multi-Head Attention, focusing on memory complexity and GPU IO bottlenecks, and give me a quick quiz to test my understanding?"*
-- **Why Delegation is Triggered**:
-  - The request combines **deep technical research** (benchmarking, memory bounds, citation synthesis) and **active recall evaluation** (quizzing).
-  - Instead of bloating the main conversation context with multi-step search scrapes or risking accidental note overwrites, the parent agent delegates to specialized child agents:
-    1. **`researcher`**: Conducts topic exploration via `research_topic` in an isolated context window (capped at 12 iterations) with zero write permissions.
-    2. **`examiner`**: Conducts active-recall question formulation with strictly read-only tools (`read_file`, `obsidian_get_backlinks`, `memory_recall`).
+- **Goal**: Ingest and analyze a complex deep learning topic (e.g., GNN message passing bottlenecks or Attention mechanisms), summarize key differences, and generate targeted active recall quiz questions.
+- **Subagents Engaged**:
+  - **`researcher`**: Explores deep technical literature and comparative benchmarks in an isolated sub-context using `research_topic`.
+  - **`examiner`**: Formulates Socratic active recall questions and self-assessment challenges without polluting the main workspace.
 
----
+### 2. User Prompt
 
-### 2. Execution Flow & Terminal Interaction
+Run the StudyMate REPL and enter a prompt requiring both deep research and self-testing:
 
-#### Step 1: Launch StudyMate REPL
-```powershell
-docker compose run --rm --service-ports studymate
-```
-
-#### Step 2: Student Input & Parent Autonomous Delegation
 ```text
-student > Can you run an in-depth comparative benchmark of FlashAttention vs. Standard Multi-Head Attention, focusing on memory complexity and GPU IO bottlenecks, and give me a quick quiz to test my understanding?
+student > please make use of the researcher subagent to analyze Graph Neural Network message passing bottlenecks (oversmoothing vs oversquashing) and then have the examiner subagent quiz me on the key differences.
 ```
 
-**Parent ReAct Reasoning**:
-- *Thought*: This query requires technical benchmarking across attention mechanisms followed by an active-recall check. I will first delegate the deep literature benchmark to the `researcher` subagent to avoid polluting the main context with raw benchmark data, and then delegate quiz formulation to the `examiner`.
-- *Action*: Calls `delegate_task(subagent_name="researcher", task="Compare FlashAttention vs Standard MHA memory complexity and SRAM IO bottlenecks")`.
+### 3. Autonomous Execution Flow
 
-#### Step 3: Permission Policy Evaluation & Child Execution
-- **Permission Gate**: The ToolRegistry evaluates the permission policy:
-  - `delegate_task` is evaluated $\rightarrow$ **`ALLOW`** (tier: `sandbox-edit`).
-  - Child's `research_topic` tool is evaluated $\rightarrow$ **`ALLOW`** (tier: `observe`).
-  - Policy decisions are recorded in `studymate_permission_decisions_total{decision="allow",tool="delegate_task"}` and `studymate_permission_decisions_total{decision="allow",tool="research_topic"}`.
-- **Context Isolation**: The child engine runs in an isolated `ContextManager`. Capped at 12 iterations, it produces a structured synthesis without accessing or modifying any vault files.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Student
+    participant Parent as StudyMate (Parent Agent)
+    participant Perm as Permission Gate
+    participant Researcher as Subagent: Researcher
+    participant Examiner as Subagent: Examiner
 
-#### Step 4: Parent Observation Ingestion & Final Answer
-- The condensed child synthesis is returned as the tool observation for `delegate_task`.
-- The parent synthesizes the research results and invokes `delegate_task(subagent_name="examiner", task="Formulate 2 Socratic conceptual questions on FlashAttention tiling and SRAM vs HBM transfers")`.
-- The parent delivers the final comprehensive study response to the student:
+    Student->>Parent: User Request (Research + Quiz)
+    Note over Parent: ReAct Step: Identify need for research & testing
+    Parent->>Perm: delegate_task(subagent_name="researcher", ...)
+    Perm-->>Parent: ALLOW (Tier 3: consequential)
+    Parent->>Researcher: Spawn isolated subagent execution
+    Researcher->>Perm: research_topic(query="GNN oversmoothing vs oversquashing")
+    Perm-->>Researcher: ALLOW (Tier 1: observe)
+    Researcher-->>Parent: Structured synthesis of GNN bottlenecks
+    
+    Note over Parent: ReAct Step: Identify need for assessment
+    Parent->>Perm: delegate_task(subagent_name="examiner", ...)
+    Perm-->>Parent: ALLOW (Tier 3: consequential)
+    Parent->>Examiner: Spawn isolated subagent execution
+    Examiner-->>Parent: 2 Socratic conceptual questions
+    
+    Parent->>Student: Final structured response with Subagent badges
+```
+
+1. **Permission Check & Isolation**:
+   - `delegate_task` is evaluated and permitted under Tier 3 policies.
+   - Child subagents run within independent context managers with bounded reasoning steps (`max_iterations: 12`) and zero unauthorized write permissions.
+2. **Telemetry & Observability**:
+   - All subagent delegations, tool calls, and permission evaluations are traced with linked parent-child IDs and streamed to Prometheus metrics & Langfuse dashboards.
+
+### 4. Final Delivered Response
+
+The parent agent aggregates the subagent outputs and presents a clean, comprehensive study guide:
 
 ```text
 studymate > 
-### Comparative Technical Benchmark: FlashAttention vs. Standard MHA
+### 🔬 [Researcher] Graph Neural Network Message Passing Bottlenecks
 
-| Property | Standard Multi-Head Attention | FlashAttention (Tiling + Recomputation) |
+| Feature / Bottleneck | Oversmoothing | Oversquashing |
 | :--- | :--- | :--- |
-| **Memory Complexity** | $O(N^2)$ intermediate attention matrix in HBM | $O(N)$ memory footprint (tiled in fast SRAM) |
-| **IO Bottleneck** | Memory-bandwidth bound (repeated HBM read/writes) | Compute-bound (kernel fusion reduces HBM roundtrips) |
-| **Backward Pass** | Stores full $N \times N$ attention weights | Recomputes attention blocks on-the-fly in SRAM |
+| **Root Cause** | Repeated Laplacian smoothing / message passing across many layers causes node representations to converge to the same subspace. | Information from exponentially growing receptive fields is compressed into fixed-size node feature vectors. |
+| **Primary Impact** | High-layer GNNs lose expressiveness and distinctiveness (all node embeddings look identical). | Long-range dependencies and multi-hop graph topology interactions cannot be captured accurately. |
+| **Mitigations** | Residual connections, DropEdge, PairNorm, GraphCON, or shallow GNN layers. | Curvature-based graph rewiring, Ricci flows, fully-connected virtual nodes, Graph Transformers. |
 
 ---
 
-### Active Recall Check (from Examiner):
-1. *Why does Standard Attention become memory-bandwidth bound on GPUs even when FLOPs are available?*
-2. *How does online softmax scaling enable FlashAttention to compute exact attention in blocks without storing the entire $N \times N$ matrix?*
+### 📝 [Examiner] Active Recall Self-Test
+
+1. **Oversmoothing vs. Graph Depth**: *Why does adding more layers to a standard GCN typically degrade node classification performance, and how do Dirichlet energy metrics quantify this phenomenon?*
+2. **Oversquashing & Curvature**: *How does negative Ricci curvature in graph bottlenecks contribute to oversquashing, and why does edge rewiring resolve it?*
 ```
 
----
-
-### 3. Verification of Observability & Linked Traces
-
-#### A. Linked Traces in `observability/traces.jsonl`
-Each child delegation generates a linked trace event where `parent_run_id` references the parent run:
-
-```json
-{
-  "schema": 2,
-  "status": "success",
-  "run_id": "c9284f1a...",
-  "parent_run_id": "a8193e2b...",
-  "tools": [
-    {
-      "name": "subagent:researcher",
-      "source": "mcp",
-      "status": "ok",
-      "duration_ms": 342.15
-    }
-  ],
-  "iterations": 2,
-  "duration_s": 0.342
-}
-```
-
-Verify in PowerShell:
-```powershell
-Get-Content observability/traces.jsonl | ConvertFrom-Json | Select-Object run_id, parent_run_id, status, duration_s
-```
-
-#### B. Prometheus Metric Verification
-Verify scraped metrics in Prometheus (`http://localhost:9092` or via API):
-
-```powershell
-# Check subagent run counters
-(Invoke-RestMethod 'http://127.0.0.1:9092/api/v1/query?query=studymate_subagent_runs_total').data.result
-
-# Check permission decisions
-(Invoke-RestMethod 'http://127.0.0.1:9092/api/v1/query?query=studymate_permission_decisions_total').data.result
-```
-
-Expected series:
-- `studymate_subagent_runs_total{config="researcher",status="success"} >= 1`
-- `studymate_permission_decisions_total{decision="allow",tool="delegate_task"} >= 1`
-- `studymate_permission_decisions_total{decision="allow",tool="research_topic"} >= 1`
-
-#### C. Langfuse Dashboard
-In **http://localhost:3000**:
-1. Open **Traces**: Inspect the root parent run and view the nested `delegate_task` observation span and child generation details.
-2. Open **Dashboards $\rightarrow$ Studymate Dashboard**:
-   - `Subagent runs over time` widget reflects the `researcher` and `examiner` invocations.
-   - `Permission decisions over time` widget displays the allowed decisions breakdown.
 
