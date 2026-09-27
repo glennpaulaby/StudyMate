@@ -70,7 +70,7 @@ class DelegateTaskTool(BaseTool):
             schema["properties"]["subagent_name"]["enum"] = names
         return schema
 
-    def execute(self, subagent_name: str, task: str, **kwargs: Any) -> str:
+    def execute(self, subagent_name: str = "", task: str = "", **kwargs: Any) -> str:
         """
         Spawns child AgentEngine instance via SubagentRegistry, runs child.run(task),
         and returns the child's final output string as the tool observation.
@@ -226,7 +226,7 @@ def register_delegation_tools(
     on_subagent_run: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
     """
-    Registers the DelegateTaskTool into the given ToolRegistry.
+    Registers the DelegateTaskTool and ResearchTopicTool into the given ToolRegistry.
     """
     tool = DelegateTaskTool(
         llm_client=llm_client,
@@ -236,3 +236,5 @@ def register_delegation_tools(
         on_subagent_run=on_subagent_run,
     )
     registry.register(tool)
+    registry.register(ResearchTopicTool())
+
