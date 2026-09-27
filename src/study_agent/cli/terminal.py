@@ -1216,15 +1216,28 @@ def run_cli(
                 continue
 
             def on_tool_start(tc: ToolCall) -> None:
-                console.print(
-                    f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{escape(tc.name)}[/yellow] "
-                    f"[dim]{escape(str(tc.arguments))}[/dim]"
-                )
+                if tc.name == "delegate_task":
+                    subagent = tc.arguments.get("subagent_name", "subagent")
+                    console.print(
+                        f"  [bold magenta]🤖 Accessing Subagent:[/bold magenta] [bold yellow]{escape(str(subagent))}[/bold yellow] "
+                        f"[dim cyan]⚙ Action:[/dim cyan] [yellow]{escape(tc.name)}[/yellow] "
+                        f"[dim]{escape(str(tc.arguments))}[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"  [dim cyan]⚙ Action:[/dim cyan] [yellow]{escape(tc.name)}[/yellow] "
+                        f"[dim]{escape(str(tc.arguments))}[/dim]"
+                    )
 
             def on_tool_end(tc: ToolCall, observation: str) -> None:
-                if observation.startswith("Error:"):
+                if observation.startswith("Error:") or "failed:" in observation.lower():
                     console.print(
                         f"  [bold red]✗ Failed:[/bold red] [yellow]{escape(tc.name)}[/yellow]"
+                    )
+                elif tc.name == "delegate_task":
+                    subagent = tc.arguments.get("subagent_name", "subagent")
+                    console.print(
+                        f"  [bold green]✓ Subagent [{escape(str(subagent))}] completed task[/bold green] [dim]({escape(tc.name)})[/dim]"
                     )
                 else:
                     console.print(
