@@ -1,75 +1,134 @@
-# StudyMate 🎓
+# StudyMate 
+> **Study Agent & Obsidian Knowledge Graph Harness**  
+> *AI Engineering Lab (SoSe 2026) — University of Passau (Group 11)*
 
-StudyMate is an autonomous AI agent harness built from scratch in Python 3.12 for the *AI Engineering Lab (SoSe 2026)* at the University of Passau. It enables university students to prepare for courses and exams by autonomously analyzing source materials and compiling structured, interconnected Obsidian knowledge bases and study artifacts (flashcards, mind maps, concept glossaries, and Socratic sparring sessions).
-
----
-
-## Overview and Features
-
-StudyMate operates directly from the terminal via an interactive CLI (`studymate`). Built on the **ReAct (Reason + Act)** paradigm, it functions as an autonomous study assistant:
-
-- **Source Material Ingestion**: Autonomously inspects and extracts text from lecture slides (`.txt`, `.md`, `.pdf`), research papers, exercise sheets, and textbook notes stored in `workspace/data/`.
-- **Atomic Obsidian Knowledge Base**: Generates interconnected study notes in `workspace/artifacts/`:
-  - **Concept Notes**: Slugs with standardized YAML frontmatter, Core Intuition, Formal Definitions, Worked Examples, Pitfalls, and `[[wikilinks]]`.
-  - **Lecture Summaries**: Synthesized high-level lecture overviews with bidirectional links to atomic concepts.
-  - **Flashcards**: Markdown-formatted active recall question-answer decks (compatible with Anki and Obsidian).
-- **Vault Health Check (Linter)**: Autonomous verification of the knowledge base graph via `/lint`:
-  - Detects broken `[[wikilinks]]` referencing non-existent notes.
-  - Identifies orphan pages with zero inbound links.
-  - Aggregates and surfaces pending open questions.
-- **Socratic Grilling (`/grill <topic>`)**: Interactive active recall sparring partner enforcing German academic rigor across escalating difficulty levels (Recall $\to$ Application $\to$ Edge Case).
-- **Strict Sandbox & Security Boundaries**:
-  - `workspace/data/`: **Read-Only** (the immutable source of truth and knowledge base).
-  - `workspace/artifacts/`: **Read, Write, and Edit** (where generated study artifacts reside).
-  - **No Deletion Guarantee**: The agent is strictly prohibited from deleting any files or directories across all paths.
-  - **Jail Containment**: All file operations are sandboxed strictly within `./workspace/`; directory traversal outside this boundary is rejected.
-- **MCP Research and Obsidian Tools**:
-  - `web_search`, `fetch_web_content`, and `expand_web_link` bridge to the external
-    [`duckduckgo-mcp-server`](https://github.com/nickclyde/duckduckgo-mcp-server)
-    over stdio. The model can search current sources and fetch pages for multi-step
-    deep research.
-  - `obsidian_list_notes`, `obsidian_read_note`, `obsidian_search_notes`, `obsidian_write_note`,
-    `obsidian_edit_note`, `obsidian_append_note`, `obsidian_get_outgoing_links`,
-    `obsidian_get_backlinks`, and `obsidian_insert_into_section` support filesystem-first note-taking,
-    including anchored edits and `[[wikilinks]]`, without deletion.
-- **Specialized Subagents & Task Delegation (`delegate_task`)**:
-  - Spawns isolated child `AgentEngine` instances with restricted toolsets and iteration caps:
-    - **`examiner`**: Dedicated active-recall sparring partner equipped only with read-only tools (`read_file`, `obsidian_get_backlinks`, `memory_recall`) to prevent note/frontmatter corruption.
-    - **`researcher`**: Dedicated deep-dive literature and technical benchmark exploration subagent (`research_topic`) that keeps massive web crawls from polluting the main session's context.
-  - Linked telemetry: child execution traces carry `parent_run_id` for end-to-end trace correlation in Langfuse and Prometheus.
-- **Multi-Tier Permission System (`/permissions`)**:
-  - Configurable policy gate evaluated in `ToolRegistry` (`allow`, `deny`, `require-user-confirmation`).
-  - Interactive terminal prompt (`y`/`n`/`always`) with fail-closed security for non-interactive environments.
-- **Live Observability & Health Monitoring**:
-  - Prometheus `/metrics` served on port `:8000` (runs, tokens, tool latencies, memory ops, permission decisions, subagent runs).
-  - Background 60s MCP health heartbeat (`studymate_mcp_up`, `studymate_mcp_probe_duration_seconds`) with silenced subprocess logging.
-  - Self-hosted Langfuse dashboard with automatic widget provisioning (`studymate-dashboard.json`).
+StudyMate is an autonomous AI agent harness built from scratch in **Python 3.12**. It helps students master complex academic courses by transforming raw lecture slides, textbooks, and research papers into an atomic, interconnected **Obsidian knowledge base**, while providing active-recall Socratic sparring, persistent memory, subagent delegation, and production-grade observability.
 
 ---
 
-## Architecture
+##  Quick Start
+
+Follow these simple steps to run and test StudyMate:
+
+### 1. Installation & Environment Setup
+```bash
+# 1. Clone and navigate into the repository
+git clone <repository-url>
+cd group-11
+
+# 2. Set up a Python 3.12 virtual environment
+python -m venv .venv
+
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows (PowerShell):
+.\.venv\Scripts\Activate.ps1
+
+# 3. Install runtime & development dependencies
+pip install -r requirements.txt
+pip install -e .
+
+# 4. Configure your API token
+cp .env.example .env
+# Edit .env and set: INNKUBE_API_KEY="your_api_token"
+```
+
+### 2. Launch StudyMate Terminal
+```bash
+studymate
+```
+
+---
+
+##  Feature-by-Feature Testing Guide
+
+Here are quick prompts you can test in the `studymate` REPL to verify all capabilities:
+
+| Feature to Test | Command / Input in REPL | What Happens |
+| :--- | :--- | :--- |
+| **1. Help & CLI Guide** | `/help` | Displays interactive slash commands, subagents, and memory controls. |
+| **2. Active Settings** | `/config` | Displays model, context window, memory paths, and observability endpoints. |
+| **3. Knowledge Ingestion** | `/ingest workspace/data` | Reads lecture materials (`.pdf`/`.txt`/`.md`) and generates linked Obsidian notes in `workspace/artifacts/`. |
+| **4. Vault Linting & Repair** | `/lint` | Analyzes the knowledge graph for broken `[[wikilinks]]` or metadata errors and triggers automatic agent repairs. |
+| **5. Socratic Grilling** | `/grill Backpropagation` | Spawns a 3-tier Socratic sparring session (Recall $\to$ Application $\to$ Edge Cases). |
+| **6. Researcher Subagent** | `delegate to researcher for comparative analysis of FlashAttention vs MHA` | Spawns an isolated `researcher` subagent to perform multi-source research without cluttering main context. |
+| **7. Examiner Subagent** | `use examiner to test me on Transformer architectures` | Spawns the read-only `examiner` subagent to quiz you without risking note corruption. |
+| **8. Permission Gating** | `/permissions` | Displays active security policy rules (`allow`, `deny`, `require-user-confirmation`). |
+| **9. Context Compaction** | `/compact` | Summarizes older conversation turns into a checkpoint when nearing context limits. |
+| **10. Persistent Memory** | `/threads` | Opens the interactive arrow-key thread picker (`↑`/`↓` + Enter) to restore past chat sessions. |
+
+---
+
+##  3-Week Specification Completion Checklist
+
+All requirements from Weeks 1, 2, and 3 have been fully implemented and verified with **261 unit & E2E benchmark tests**:
+
+### Week 1: Core ReAct Harness, Sandboxed Tools & Study Vault Engine
+- [x] **Autonomous ReAct Loop**: Custom Reason + Act state machine (`AgentEngine`) with step budgeting (`max_iterations`).
+- [x] **Sandboxed Filesystem Tools**: 8 secure tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`, `rename_file`).
+- [x] **Path Jail & Security Containment**:
+  - `workspace/data/` is strictly **Read-Only** (source materials).
+  - `workspace/artifacts/` is **Read/Write/Edit** (generated knowledge base).
+  - Directory traversal (`../`) and unauthorized path escapes are blocked.
+  - **No-Delete Invariant**: Deletion is permanently prohibited across all storage layers.
+- [x] **Obsidian Templates**: Standardized YAML frontmatter schemas and bidirectional `[[wikilinks]]` (`format_concept_note`).
+- [x] **Knowledge Graph Linter**: `VaultLinter` detects broken links, missing frontmatter, and orphan notes.
+- [x] **Socratic Griller**: `SocraticGriller` with German academic rigor across escalating difficulty levels.
+- [x] **Interactive CLI**: Rich terminal REPL (`studymate`) with autocompletion and UTF-8 Windows compatibility.
+
+### Week 2: Model Context Protocol (MCP) & Long-Term Memory
+- [x] **MCP Web Research**: DuckDuckGo search integration (`web_search`, `fetch_web_content`, `expand_web_link`) via persistent stdio MCP bridge.
+- [x] **MCP Obsidian Vault**: Dedicated FastMCP server (`obsidian_*`) exposing note inspection, backlinks, outgoing links, and anchored section inserts.
+- [x] **Episodic Long-Term Memory**:
+  - SQLite persistent chat threads (`workspace/artifacts/memory/memory.db`).
+  - Semantic vector search with `sqlite-vector` Float32 cosine embeddings (`octen-embedding-8b`).
+  - Cross-encoder reranker (`qwen3-reranker-4b`) for hybrid keyword + vector rank fusion.
+  - Agent tools for memory storage and recall (`memory_store`, `memory_recall`).
+- [x] **Procedural Memory Bundles**: Markdown routines in `workspace/artifacts/procedures/` with lifecycle stages (`draft`, `approved`, `archived`) and dynamic prompt injection.
+- [x] **Context Window Compaction**: Proactive token estimation, gateway context window resolution, tool output pruning, and on-demand `/compact` checkpointing.
+
+### Week 3: Observability, Multi-Tier Permissions & Subagents
+- [x] **Prometheus Metrics Exporter**: Standalone HTTP exporter (`:8000/metrics`) tracking `studymate_agent_runs_total`, latency histograms, token counters, memory ops, tool calls, and subagent runs.
+- [x] **Production Tracing & Langfuse**:
+  - Harness-owned append-only JSONL log (`./observability/traces.jsonl`).
+  - Asynchronous OpenTelemetry (OTel v4) export to self-hosted Langfuse.
+  - Automatic dashboard widget provisioning (`provision-dashboard` service).
+- [x] **Multi-Tier Security & Permission Gate**:
+  - Configurable policy engine (`allow`, `deny`, `require-user-confirmation`).
+  - Interactive terminal confirmation handler (`y` / `n` / `always`).
+  - Fail-closed security for headless and non-interactive environments.
+- [x] **Specialized Context-Isolated Subagents**:
+  - `SubagentRegistry` & `DelegateTaskTool` for spawning isolated child `AgentEngine` instances.
+  - Pre-configured `examiner` (read-only active recall) and `researcher` (deep literature analysis).
+  - Correlated parent-child telemetry linking (`parent_run_id`).
+- [x] **Background MCP Health Heartbeat**: Periodic 60s daemon probe recording `studymate_mcp_up` gauges and Langfuse heartbeat timelines.
+
+---
+
+##  System Architecture
 
 ```mermaid
 flowchart TD
-    User([Student / Terminal]) <-->|CLI: studymate| CLI[Terminal UI / REPL<br/>+ Completer + Context Toolbar]
+    User([Student / Terminal]) <-->|CLI: studymate| CLI[Terminal UI / REPL<br/>+ Completer + Status Bar]
     CLI <--> Core[ReAct Engine / State Machine]
-    CLI <--> Linter[Vault Linter & Health Check]
-    CLI <--> Griller[Socratic Grilling Sparring]
+    CLI <--> Linter[Vault Linter & Auto-Repair]
+    CLI <--> Griller[Socratic Griller]
 
     subgraph Harness["StudyMate Agent Harness"]
         Core <--> Context[Context Manager<br/>+ Auto/Manual Compaction]
         Core <--> LLM[LLM Client / InnKube<br/>chat + octen-embedding-8b + qwen3-reranker-4b]
+        Core <--> Subagents[Subagent Registry<br/>Examiner & Researcher]
         Core <--> Registry[Tool Registry]
-        Registry <--> Security[Security & Path Jail Policy]
-        Security <--> FS[Filesystem & PDF Tools]
-        Registry <--> Memory[Memory Store<br/>Threads + Facts]
+        Registry <--> Policy[Multi-Tier Permission Policy<br/>allow / deny / confirm]
+        Policy <--> FS[Sandboxed Filesystem & PDF Tools]
+        Policy <--> Memory[Memory Store<br/>Threads + Facts]
         Memory <--> Vector[sqlite-vector<br/>cosine search]
         Memory <--> Rerank[InnKube Reranker<br/>hybrid reordering]
-        Registry <--> Proc[Procedures<br/>markdown bundles<br/>draft/approved/archived]
-        Registry <--> MCP[MCP Tools<br/>Web Research (DuckDuckGo)<br/>+ Obsidian Vault]
-        Core -.->|lifecycle hooks<br/>runs/llm/tools/memory| Obs[Observability<br/>Prometheus metrics<br/>+ JSONL traces]
-        Obs -->|export| LF[(Langfuse<br/>per-run traces)]
-        Obs -->|scrape :8000| Prom[(Prometheus<br/>rules + dashboard)]
+        Policy <--> Proc[Procedural Memory<br/>draft / approved / archived]
+        Policy <--> MCP[MCP Tools<br/>DuckDuckGo Search + Obsidian Vault]
+        Core -.->|telemetry hooks| Obs[Observability Layer<br/>Prometheus Exporter + JSONL Tracing]
+        Obs -->|export| LF[(Langfuse Traces)]
+        Obs -->|scrape :8000| Prom[(Prometheus Metrics)]
     end
 
     subgraph Sandbox["Workspace Sandbox"]
@@ -77,295 +136,118 @@ flowchart TD
         FS <-->|Read / Write / Edit| Artifacts[("workspace/artifacts/<br/>(Obsidian Notes +<br/>memory.db + procedures/)")]
         Memory <--> Artifacts
         Proc <--> Artifacts
-        MCP -.->|search/fetch| Internet[(Internet)]
+        MCP -.->|search/fetch| Web[(Internet / DuckDuckGo)]
         MCP <--> Artifacts
     end
 ```
 
 ---
 
-## Project Structure
+## 🛠️ Tech Stack
+
+- **Runtime**: Python 3.12 (`python:3.12-slim-bookworm` containerized)
+- **Inference Engine**: InnKube OpenAI-compatible API (`qwen-agentworld-35b-a3b`, `gemma4-31b-it`)
+- **Embeddings & Reranking**: `octen-embedding-8b`, `qwen3-reranker-4b`
+- **Vector Search**: SQLite with `sqlite-vector` native extension
+- **Tool Protocol**: Model Context Protocol (MCP) over Stdio (FastMCP + DuckDuckGo MCP Server)
+- **Terminal UI**: `prompt_toolkit` + `rich` (formatted status bars, syntax highlighting, autocompletion)
+- **Data Validation & Settings**: `pydantic>=2.7`, `pyyaml>=6.0`
+- **PDF Extraction**: `pypdf>=4.0`
+- **Observability**: `prometheus_client`, `langfuse>=2.0`, OpenTelemetry SDK
+- **Testing**: `pytest`, `pytest-cov`, `pytest-mock`
+
+---
+
+## 💬 Interactive Commands & Triggers
+
+StudyMate provides convenient slash commands and natural-language triggers in the REPL:
 
 ```text
-project/group-11/
+StudyMate Commands:
+  /help                  Show interactive help and available commands
+  /ingest [path]         Ingest source materials and generate Obsidian notes
+  /lint [path]           Run knowledge graph health check and auto-repair broken links
+  /grill <topic>         Launch active-recall Socratic sparring session
+  /templates             Display standard Obsidian markdown templates
+  /threads               Browse previous chat threads (arrow keys ↑/↓ + Enter)
+  /thread <id|name>      Switch to or continue a specific chat thread
+  /new [name]            Start a fresh conversation thread
+  /archive-this          Archive the active chat thread (soft tombstone)
+  /archive-all           Archive all chat threads with confirmation
+  /compact               Summarize history into a checkpoint immediately
+  /clear                 Reset in-memory transcript (thread remains saved in SQLite)
+  /config                Display current active configuration parameters
+  /permissions           Show active tool permission policy and session allowances
+  /exit, /quit           Exit StudyMate safely
+```
+
+### Natural-Language Delegation Triggers:
+- **Researcher Subagent**: *"delegate to researcher for comparative analysis of X vs Y"*
+- **Examiner Subagent**: *"use examiner to test me on topic Z"*
+
+---
+
+## 📂 Project Structure
+
+```text
+group-11/
 ├── config/
-│   ├── config.yaml             # Model, agent parameters, and tool sandbox settings
-│   └── soul.md                 # Agent persona, directives, and output conventions
+│   ├── config.yaml             # Source of truth: model, paths, tools, permissions, observability
+│   └── soul.md                 # Agent persona, directives, and output formatting rules
 ├── src/
 │   └── study_agent/
-│       ├── cli/                # Terminal interactive REPL (studymate)
-│       ├── config/             # Configuration schemas and YAML/env loader
-│       ├── core/               # ReAct loop, context manager, compaction, subagents, state machine
-│       ├── llm/                # InnKube (OpenAI-compatible) client and test mocks
-│       ├── tools/              # Tool registry, filesystem/PDF tools, and MCP capabilities
-│       │   └── mcp/            # External web-search bridge + Obsidian MCP server
+│       ├── cli/                # Terminal interactive REPL (studymate) with prompt_toolkit
+│       ├── config/             # Pydantic schemas (settings.py) and YAML/env loader (loader.py)
+│       ├── core/               # ReAct engine, context manager, compaction, subagent registry, types
+│       ├── llm/                # OpenAI-compatible LLM client and offline test mocks
+│       ├── memory/             # SQLite episodic store, sqlite-vector, reranking, and memory tools
+│       ├── observability/      # Prometheus metrics, JSONL tracing, Langfuse export, health heartbeat
+│       ├── security/           # Multi-tier permission policy engine and interactive confirmation
 │       ├── study/              # Obsidian templates, VaultLinter, SocraticGriller, Procedures
-│       ├── memory/             # SQLite threads/facts + sqlite-vector + reranker
-│       ├── observability/      # Metrics + tracing + events + health (metrics.py, tracing.py, events.py, health.py)
-│       ├── security/           # Multi-tier permission management (Week 3)
-│       └── subagents/          # Specialized sub-agent coordination (Week 3)
-├── observability/              # Prometheus scrape config + rules (committed)
-│                               # traces.jsonl = harness-owned run log (gitignored)
+│       └── tools/              # Tool registry, sandboxed filesystem/PDF tools, MCP adapters, delegation
+├── observability/              # Prometheus scrape configuration and dashboard recording rules
+├── scenarios/                  # Scenario walkthroughs and benchmark reports (Week 1, 2, 3)
 ├── tests/
-│   ├── unit/                   # Unit tests (config, context, LLM, tools, engine, linter)
-│   └── e2e/                    # End-to-end benchmark & study workflow tests
+│   ├── unit/                   # Unit tests (config, tools, context, memory, permissions, subagents, etc.)
+│   └── e2e/                    # End-to-end benchmark tests (file ops, study workflows, MCP)
 ├── workspace/
 │   ├── data/                   # Input study materials (Read-Only)
-│   └── artifacts/              # Generated study artifacts (Read/Write/Edit)
-├── compose.yaml                # Docker Compose multi-platform launcher
-├── Dockerfile                  # Container definition (python:3.12-slim-bookworm)
-├── pyproject.toml              # Modern Python packaging & CLI entrypoint
-└── requirements.txt            # Locked project dependencies
+│   └── artifacts/              # Generated study notes, memory database, procedures (Read/Write)
+├── compose.yaml                # Multi-service stack (StudyMate, Prometheus, Langfuse, Postgres, ClickHouse)
+├── Dockerfile                  # Production container definition
+├── pyproject.toml              # Packaging and CLI entrypoint definition
+└── requirements.txt            # Locked runtime dependencies
 ```
 
 ---
 
-## Getting Started
+##  Docker Deployment & Observability Stack
 
-### 1. Prerequisites
-- Python 3.12+
-- Docker or Podman (for containerized execution)
+You can run StudyMate and its complete observability stack via Docker Compose:
 
-### 2. Local Setup
 ```bash
-# Clone the repository and navigate to the project directory
-git clone <repository-url>
-cd project/group-11
-
-# Create and activate a Python 3.12 virtual environment
-python -m venv venv
-
-# On Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-
-# On Linux/macOS:
-source venv/bin/activate
-
-# Install dependencies and package in editable mode
-pip install -r requirements.txt
-pip install -e .
-```
-
-### 3. Environment Configuration
-Create a `.env` file from the provided template and configure your InnKube API token:
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-```env
-INNKUBE_API_KEY=your_innkube_token_here
-```
-
-Which keys you set yourself vs. generate: **you set** values that come from
-a provider or a UI — `INNKUBE_API_KEY` (lab token) and, for observability,
-`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (Langfuse → Settings → API Keys)
-plus the `*_ENABLED`/host toggles. **You generate** the machine-to-machine
-passwords (`POSTGRES_PASSWORD`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`,
-`MINIO_ROOT_PASSWORD` + S3 keys, `NEXTAUTH_SECRET`, `SALT`,
-`ENCRYPTION_KEY`): random per machine, never typed by hand — e.g.
-`python -c "import secrets; print(secrets.token_urlsafe(24))"`. Rule of
-thumb: if you had to ask someone (or some UI) for the value, you set it;
-if it just needs to exist and match on both ends, generate it. `.env` is
-gitignored — never commit it.
-
-### 4. Add Your Study Materials
-`workspace/data/` and `workspace/artifacts/` aren't tracked in git (they start empty, except
-committed `workspace/artifacts/procedures/`), so on a fresh
-clone you need to create them yourself before running StudyMate locally (the Docker image creates them
-automatically at build time):
-```bash
-mkdir -p workspace/data workspace/artifacts
-```
-Then drop your lecture slides, notes, or PDFs into `workspace/data/` — this is the **read-only** source
-StudyMate ingests from. Generated notes will be written to `workspace/artifacts/`.
-
-### 5. Running StudyMate
-Once installed, launch the interactive agent terminal using:
-```bash
-studymate
-```
-
-The MCP server can be launched over stdio for an MCP host. Set `OBSIDIAN_VAULT_PATH`
-to override the vault directory; it defaults to the project `workspace/` directory:
-
-```powershell
-$env:OBSIDIAN_VAULT_PATH = "C:\path\to\your\vault"
-python -m study_agent.tools.mcp.server
-```
-
-Web search is provided by the external DuckDuckGo MCP server, prebaked into the image
-at `/opt/mcp/ddg/bin` (`Dockerfile`) and spawned by bare command name
-(`tools.mcp.search_command: "duckduckgo-mcp-server"`, `search_args: []` in
-`config/config.yaml`). On a host without the bake-in, install `uv` first
-(`pip install uv`) or set `tools.mcp.search_command` and `tools.mcp.search_args`
-in `config/config.yaml` to another launcher. Fallback via `uvx`:
-
-```yaml
-tools:
-  mcp:
-    search_command: "uvx"
-    search_args:
-      - "--with"
-      - "duckduckgo-mcp-server[browser]"
-      - "duckduckgo-mcp-server"
-```
-
-#### Interactive Commands in REPL:
-- `/help` — Display command guide
-- `/ingest [path]` — Ingest source files (defaults to `workspace/data/`) into Obsidian concept notes + lecture summary
-- `/lint [path]` — Run knowledge graph health check on study artifacts
-- `/grill <topic>` — Launch an interactive Socratic sparring session on a topic
-- `/templates` — Display standard Obsidian markdown templates
-- `/threads` — Browse previous chat threads (↑/↓ + Enter, paged)
-- `/thread <#|id|name>` — Enter/continue a previous thread (transcript restored)
-- `/new [name]` — Start a new thread (default on first message)
-- `/archive-this` — Archive the current thread (tombstone, no delete)
-- `/archive-all` — Archive ALL threads (asks for confirmation)
-- `/compact` — Summarize history into a checkpoint now (while staying on the same thread)
-- `/clear` — Reset in-memory history (thread history stays saved)
-- `/config` — View active runtime settings
-- `/permissions` — Show the active tool permission policy and session allowances
-- `/exit, /quit` — Quit StudyMate
-
-#### Long-Term Memory:
-Chat threads persist across restarts in `workspace/artifacts/memory/memory.db`
-(SQLite). Durable facts (preferences, struggles) are stored via the agent's
-`memory_store` tool and retrieved hybrid: exact keyword matches first, then
-meaning-similar hits via `sqlite-vector` cosine search, reordered by the
-InnKube reranker (`memory_recall`). One API key covers chat, embeddings,
-and rerank (granted per model server-side). Top recent facts auto-inject
-at session start. All memory writes are append-only — nothing is ever deleted.
-
-#### Procedural Memory:
-Reusable routines live as markdown bundles in `workspace/artifacts/procedures/`
-(committed, reviewable). Each has triggers, scope, ordered steps, rationale,
-and a `draft/approved/archived` status. Matching approved routines inject
-automatically before the agent acts; drafts are surfaced for confirmation,
-never followed silently. Agent-distilled routines start as drafts for human
-approval; editing a file supersedes it (git is the version log).
-
-#### Context Compaction:
-Long sessions compact automatically at ~80% of the active model's window
-(resolved per model via `compaction.context_windows`, gateway discovery,
-or a conservative default — see `/config`), or on demand with `/compact`.
-Old tool outputs blank first (free); older turns then fold into one summary
-in the same thread. Nothing is deleted: the summary persists to the thread.
-
-#### Observability (Week 3 Task 1):
-Every run emits `studymate_*` Prometheus series (runs, LLM calls + tokens,
-tool calls by `builtin|mcp|memory` tier, memory ops, compactions, plus
-`permission_decisions_total` and `subagent_runs_total` contract hooks owned
-by teammates) via decoupled lifecycle hooks — never inline prints. One JSON
-line per run appends to harness-owned `./observability/traces.jsonl`
-(outside the agent's write jail) and exports best-effort to self-hosted
-Langfuse. Enable with `STUDYMATE_METRICS_ENABLED=true` (metrics on
-`127.0.0.1:8000`, `/config` shows state); scrape config and dashboard
-recording rules live in `observability/`; the full stack
-(`studymate` + `prometheus` + Langfuse) boots via `docker compose up -d` —
-see `scenarios/Week3_Scenarios.md`.
-
----
-
-## Usage Example
-
-A typical session: point the agent at your lecture material, let it build the knowledge base, then
-check the vault's health.
-
-```
-$ studymate
-
-  🎓 Welcome to StudyMate
-  Model: qwen-agentworld-35b-a3b  Endpoint: https://llms.innkube.fim.uni-passau.de
-  Type your question or study goal. Type /help for commands or /exit to quit.
-
-student > /ingest workspace/data
-📥 Ingesting source material from 'workspace/data'...
-
-  ⚙ Action: list_files {'path': 'workspace/data'}
-  ⚙ Action: read_file {'path': 'workspace/data/lecture01.pdf'}
-  ⚙ Action: write_file {'path': 'workspace/artifacts/lecture-lecture01.md', ...}
-  ⚙ Action: write_file {'path': 'workspace/artifacts/concept-dynamic-programming.md', ...}
-
-I've ingested lecture01.pdf and created lecture-lecture01.md, cross-linked to
-concept-dynamic-programming.md via [[wikilinks]].
-
-student > /lint
-Vault Health Report: workspace/artifacts
-  Total Markdown Notes: 2   Broken Wikilinks: 0 (Clean)   Orphan Pages: 0
-
-student > /grill Dynamic Programming
-🥊 Launching Socratic Grilling Session on 'Dynamic Programming'...
-Define the optimal substructure property. Be precise — no hand-waving.
-
-student > /exit
-Goodbye and happy studying! 🎓
-```
-
----
-
-## Testing
-
-Execute the automated test suite with pytest (261 unit and E2E tests collected with 100% pass rate; external-MCP e2e skipped without the `duckduckgo-mcp-server` binary):
-```bash
-# Run all tests
-pytest
-
-# Or via uv:
-uv run --python 3.12 --extra dev pytest
-```
-
----
-
-## Containerization (Docker)
-
-To execute StudyMate and its observability stack inside an isolated Debian-based container (`python:3.12-slim-bookworm`):
-
-### Option A: Using Docker Compose (Recommended)
-```bash
-# 1. Pull and build the StudyMate container image
-docker compose pull
+# 1. Build the StudyMate container image
 docker compose build studymate
 
-# 2. Boot backends, Prometheus, Langfuse, and auto-provision dashboard widgets
+# 2. Start the full observability backend (Prometheus, Langfuse, ClickHouse, Postgres)
 docker compose up -d postgres redis clickhouse minio langfuse-web langfuse-worker prometheus provision-dashboard
 
-# 3. Launch the interactive StudyMate REPL inside the sandboxed container
+# 3. Launch StudyMate in the container
 docker compose run --rm --service-ports studymate
 ```
 
-### Option B: Using Standard Docker CLI
-```bash
-# Build the container image
-docker build -t studymate .
-
-# Run the agent interactively with mounted workspace
-docker run -it --rm \
-  -e INNKUBE_API_KEY="your_api_key" \
-  -v ./workspace:/app/workspace \
-  studymate
-```
+- **Prometheus Metrics**: `http://localhost:8000/metrics`
+- **Langfuse Web UI**: `http://localhost:3000`
 
 ---
 
-## Roadmap and Milestones
+##  Automated Testing & Verification
 
-- [x] **Week 1: Core ReAct Harness, Sandboxed Tools & Study Vault Engine**
-  - Interactive terminal CLI (`studymate`) with `/lint`, `/grill`, `/templates`
-  - YAML configuration with environment variable secret handling
-  - Sandboxed tools (`create_folder`, `write_file`, `read_file`, `read_pdf`, `list_files`, `search_text`, `edit_file`, `rename_file`)
-  - Strict security boundaries (workspace path jail, read-only data, delete strictly prohibited)
-  - Full Obsidian concept linking, `VaultLinter` health checks, and `SocraticGriller`
-  - 58 unit & E2E tests covering core tool execution and study ingestion workflows
-  - Containerization with `Dockerfile` and `compose.yaml`
-- [x] **Week 2: Model Context Protocol (MCP) and Long-Term Memory**
-  - Internet research aggregation (`web_search`, `fetch_web_content`) via stdio MCP bridge
-  - Safe Obsidian vault MCP tools (`obsidian_*`) with anchored section edits
-  - Long-term memory store (SQLite threads + facts) with `sqlite-vector` cosine search and InnKube reranker (`memory_recall`)
-  - Reusable procedural memory bundles (`workspace/artifacts/procedures/`)
-  - Automatic and on-demand context compaction (`/compact`)
-- [x] **Week 3: Observability, Permissions, and Sub-Agents**
-  - [x] Prometheus metrics + Langfuse trace export (`studymate_*` series, `observability/` scrape config + rules)
-  - [x] Multi-tier permission system (`allow`, `deny`, `require-user-confirmation`) — policy gate in `ToolRegistry`, YAML rules (first match wins, fail-closed default), interactive `y/n/always`, `/permissions`, decision events on a hook seam for Prometheus
-  - [x] Specialized sub-agents with task delegation on the same harness (`SubagentRegistry`, `DelegateTaskTool`, pre-configured `examiner` for Socratic grilling with read-only tools and `researcher` for literature analysis, context isolation, and `parent_run_id` telemetry tracking)
-  - [x] Periodic background MCP health heartbeat with silenced subprocess logging and real-time dashboard widgets
+StudyMate includes an extensive automated test suite covering all units, edge cases, and end-to-end workflows:
+
+```bash
+# Run the complete test suite
+pytest -v
+```
+
+**Test Suite Result**: `261 passed, 3 skipped (100% pass rate)`.
