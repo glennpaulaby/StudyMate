@@ -1,3 +1,11 @@
+"""
+Chat Thread Utilities & Resolution for StudyMate.
+
+Provides naming heuristics (generating concise, descriptive slugs from the initial
+user prompt) and multi-strategy thread query resolution (exact UUID, UUID prefix,
+or case-insensitive thread name match).
+"""
+
 import re
 import uuid
 from typing import List, Optional
@@ -16,6 +24,15 @@ def generate_thread_name(
 
     Heuristic v1 (no LLM call): slugify first user message, truncate.
     Falls back to `thread-<shortid>` when input is empty.
+
+    Args:
+        first_message: The student's first prompt in the session.
+        second_message: Optional subsequent message.
+        max_len: Maximum character length of the generated slug.
+        fallback_id: Short ID string used if the prompt produces an empty slug.
+
+    Returns:
+        A human-readable, slugified thread name.
     """
     _ = second_message  # Reserved for v2 (first-couple-messages naming).
     text = re.sub(r"\s+", " ", (first_message or "").strip())
@@ -36,6 +53,13 @@ def resolve_thread(
 
     Returns None when no match, first most-recent match on ambiguity
     (callers pass `list_threads()` which is already updated_at DESC).
+
+    Args:
+        threads: List of available ThreadRecords.
+        query: User input string (UUID, prefix, or name).
+
+    Returns:
+        The matching ThreadRecord, or None if not found.
     """
     q = (query or "").strip()
     if not q:
@@ -51,3 +75,4 @@ def resolve_thread(
         if t.name.lower() == q_lower:
             return t
     return None
+

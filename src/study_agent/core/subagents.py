@@ -1,3 +1,12 @@
+"""
+Subagent Registry & Specialized Child Engine Factory for StudyMate.
+
+Defines the configuration models, system personas, and instantiation factory
+for specialized child subagents (e.g. 'examiner' and 'researcher'). Child
+agents run in strictly isolated context windows with bounded ReAct iterations
+and fine-grained tool whitelists.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -15,7 +24,14 @@ logger = logging.getLogger(__name__)
 
 class SubagentConfig(BaseModel):
     """
-    Specification and constraints for a specialized child subagent.
+    Specification, tool whitelists, and execution bounds for a specialized child subagent.
+    
+    Attributes:
+        name: Unique name identifier (e.g., 'examiner', 'researcher').
+        description: High-level summary of capabilities for LLM delegation.
+        system_prompt: Role-specific system instructions and directives.
+        allowed_tools: List of tool names permitted for this subagent.
+        max_iterations: Maximum ReAct loop iterations allocated for the subagent.
     """
     name: str = Field(description="Unique name identifier for the subagent")
     description: str = Field(description="Summary of the subagent's role and capabilities")
@@ -65,7 +81,7 @@ class SubagentRegistry:
         self._subagents: Dict[str, SubagentConfig] = {}
 
     def register(self, config: SubagentConfig) -> None:
-        """Registers a subagent configuration."""
+        """Registers a subagent configuration in the registry."""
         if config.name in self._subagents:
             logger.warning(f"Overwriting existing subagent configuration: {config.name}")
         self._subagents[config.name] = config
@@ -94,6 +110,16 @@ class SubagentRegistry:
         """
         Instantiates an isolated child AgentEngine configured according to
         the subagent's specification, restricting tools strictly to allowed_tools.
+
+        Args:
+            name: Name of the subagent to instantiate.
+            llm_client: The shared LLM inference client.
+            base_registry: Parent tool registry to filter tools and inherit security policies from.
+            parent_run_id: Observability run ID linking child traces to the parent turn.
+            on_telemetry_event: Telemetry listener callback.
+
+        Returns:
+            A dedicated, sandboxed AgentEngine instance.
         """
         config = self.get(name)
         if not config:
@@ -138,7 +164,7 @@ def get_default_subagent_registry() -> SubagentRegistry:
     """
     registry = SubagentRegistry()
 
-    # 1. Examiner Subagent
+    # 1. Examiner Subagent (Active recall, Socratic grilling, read-only tools)
     registry.register(
         SubagentConfig(
             name="examiner",
@@ -149,7 +175,7 @@ def get_default_subagent_registry() -> SubagentRegistry:
         )
     )
 
-    # 2. Researcher Subagent
+    # 2. Researcher Subagent (Literature synthesis, topic breakdown, exploration tools)
     registry.register(
         SubagentConfig(
             name="researcher",
@@ -161,3 +187,4 @@ def get_default_subagent_registry() -> SubagentRegistry:
     )
 
     return registry
+

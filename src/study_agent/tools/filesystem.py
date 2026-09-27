@@ -1,3 +1,15 @@
+"""
+Sandboxed Filesystem Tools for StudyMate.
+
+Implements secure, jail-contained filesystem operations:
+- `PathSecurityManager`: Strict sandbox isolation ensuring all paths resolve within
+  permitted read and write boundaries, blocking directory traversal attacks (`../`).
+- Atomic file writes: Crash-atomic updates using temporary sibling files and `os.replace`.
+- No-delete invariant: Refuses destructive deletion operations.
+- Supported operations: `create_folder`, `write_file`, `read_file`, `list_files`,
+  `search_text`, `edit_file`, `rename_file`, and `read_pdf` (with pagination).
+"""
+
 import os
 import re
 import tempfile
@@ -32,10 +44,11 @@ def _atomic_write_text(target: Path, content: str) -> None:
 class PathSecurityManager:
     """
     Validates and resolves file paths against configured sandbox policies.
+
     Guarantees:
     1. Jail containment (no path traversal outside allowed directories).
-    2. Read-only protection for source materials.
-    3. Strict deletion prohibition.
+    2. Read-only protection for source materials (e.g., workspace/data).
+    3. Strict deletion prohibition across all storage tiers.
     """
 
     def __init__(

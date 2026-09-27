@@ -1,4 +1,12 @@
-﻿import json
+"""
+OpenAI-Compatible LLM Client Implementation.
+
+Provides inference connectivity to OpenAI-compatible endpoints (e.g., InnKube cluster).
+Handles reasoning breakout extraction, thinking block splitting (<think>...</think>),
+tool call argument parsing, and standardized error transformation.
+"""
+
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional

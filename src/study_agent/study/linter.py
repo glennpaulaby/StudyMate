@@ -1,3 +1,14 @@
+"""
+Obsidian Knowledge Base Linter for StudyMate.
+
+Performs static analysis and graph health checks on Obsidian Markdown notes
+in the vault/artifacts directory:
+1. Validates YAML frontmatter metadata schema (checks required 'title' & 'status').
+2. Extracts and checks [[wikilinks]] for broken references.
+3. Detects orphan pages with zero inbound links.
+4. Parses open questions logged under `## Open Questions`.
+"""
+
 import os
 import re
 import yaml
@@ -8,7 +19,7 @@ from typing import Dict, List, Set, Tuple
 
 @dataclass
 class VaultLintReport:
-    """Structured report produced by VaultLinter."""
+    """Structured report produced by VaultLinter containing all vault health metrics."""
     total_files: int = 0
     total_links: int = 0
     broken_links: List[Tuple[str, str]] = field(default_factory=list)  # (source_file, broken_target)
@@ -18,6 +29,7 @@ class VaultLintReport:
 
     @property
     def is_healthy(self) -> bool:
+        """Returns True if the vault has zero broken links and zero metadata issues."""
         return len(self.broken_links) == 0 and len(self.metadata_issues) == 0
 
 
@@ -35,10 +47,21 @@ class VaultLinter:
     OPEN_QUESTIONS_PATTERN = re.compile(r"## Open Questions\s*\n(.*?)(?=\n## |\Z)", re.DOTALL)
 
     def __init__(self, vault_dir: Path | str) -> None:
+        """
+        Initializes the linter with the root directory of the Obsidian vault.
+
+        Args:
+            vault_dir: Path to the vault or artifacts folder.
+        """
         self.vault_dir = Path(vault_dir).resolve()
 
     def lint(self) -> VaultLintReport:
-        """Executes a full health check scan across all Markdown notes in the vault."""
+        """
+        Executes a full health check scan across all Markdown notes in the vault.
+        
+        Returns:
+            VaultLintReport populated with detected issues and graph metrics.
+        """
         report = VaultLintReport()
 
         if not self.vault_dir.exists():
@@ -129,3 +152,4 @@ class VaultLinter:
                 report.orphan_pages.append(rel_name)
 
         return report
+

@@ -1,3 +1,12 @@
+"""
+Procedural Knowledge & Routine Memory for StudyMate.
+
+Handles parsing, loading, keyword/trigger matching, and system prompt injection
+of structured study routines (Procedures). Procedures guide recurring workflows
+(e.g., lecture ingestion routines, exam review checklists) with explicit steps,
+rationales, and common pitfalls.
+"""
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +45,22 @@ supersedes: {supersedes}
 
 @dataclass
 class Procedure:
-    """Parsed procedure bundle (shape, not just verbs)."""
+    """
+    Parsed procedure bundle representing an executable study routine.
+    
+    Attributes:
+        name: Routine identifier.
+        triggers: List of keywords/phrases that activate this routine.
+        scope: Boundaries explaining when the routine applies.
+        version: Integer revision number.
+        status: Lifecycle state ('draft', 'approved', 'archived').
+        supersedes: Previous procedure name if replacing an older version.
+        steps: Step-by-step instructions.
+        rationale: Non-obvious reasons behind specific steps.
+        pitfalls: Common failure modes.
+        example: Concrete usage walkthrough.
+        source: Filepath on disk.
+    """
     name: str
     triggers: List[str] = field(default_factory=list)
     scope: str = ""
@@ -62,7 +86,7 @@ def format_procedure(
     status: str = DRAFT,
     supersedes: str = "",
 ) -> str:
-    """Formats a procedure bundle with frontmatter + shape sections."""
+    """Formats a procedure bundle with YAML frontmatter and standard sections."""
     triggers_str = ", ".join(f'"{t}"' for t in (triggers or []))
     return PROCEDURE_TEMPLATE.format(
         name=name,
@@ -79,7 +103,7 @@ def format_procedure(
 
 
 def parse_procedure_file(path: Path) -> Optional[Procedure]:
-    """Parses one procedure file; None when unreadable or frontmatter-less."""
+    """Parses one procedure file; returns None when unreadable or frontmatter-less."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except Exception as e:
@@ -148,7 +172,8 @@ def match_procedures(
     limit: int = 2,
     max_chars: int = 4000,
 ) -> List[Procedure]:
-    """Matches procedures by substring over name/triggers/scope (case-insensitive).
+    """
+    Matches procedures by substring over name/triggers/scope (case-insensitive).
 
     Only `statuses` match (archived never does); sorted by name for
     determinism; total injected text capped at max_chars.
@@ -198,3 +223,4 @@ def format_procedures_block(procedures: List[Procedure]) -> str:
     parts = ["Applicable routines (follow before improvising):"]
     parts += [procedure_injection_text(p) for p in procedures]
     return "\n\n".join(parts)
+

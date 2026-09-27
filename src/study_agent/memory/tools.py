@@ -1,3 +1,11 @@
+"""
+Agent Tools for Persistent Semantic & Episodic Memory in StudyMate.
+
+Exposes `memory_store` (for saving user preferences, goals, and recurring study
+struggles with thread provenance) and `memory_recall` (for hybrid keyword +
+vector retrieval of stored facts) as standard tools to the AgentEngine.
+"""
+
 import logging
 from typing import Any, Dict, List, Optional
 from study_agent.memory.embeddings import Embedder, pack_embedding
@@ -35,7 +43,8 @@ class MemoryStoreTool(BaseTool):
         self.current_thread_name = ""
 
     def set_thread_context(self, thread_id: str, thread_name: str) -> None:
-        """Pins the active thread provenance stamped onto stored facts.
+        """
+        Pins the active thread provenance stamped onto stored facts.
 
         Called per turn by the REPL (harness-injected, never LLM-supplied —
         the schema exposes no thread fields so the model can't forge them).
@@ -174,9 +183,10 @@ def register_memory_tools(
     embedder: Optional[Embedder] = None,
     reranker: Optional[Reranker] = None,
 ) -> None:
-    """Registers memory_store/memory_recall into the provided registry (no-op if store is None)."""
+    """Registers memory_store and memory_recall into the provided registry (no-op if store is None)."""
     if store is None:
         logger.warning("MemoryStore unavailable; memory tools not registered.")
         return
     registry.register(MemoryStoreTool(store, embedder))
     registry.register(MemoryRecallTool(store, embedder, reranker))
+

@@ -1,3 +1,11 @@
+"""
+Obsidian Markdown Knowledge Base Templates for StudyMate.
+
+Defines standardized templates and helper formatters for generating linked
+Obsidian study artifacts, including Concept Notes, Lecture Summaries, and
+Flashcard Decks with YAML frontmatter, wikilinks, and Open Questions.
+"""
+
 from datetime import date
 from typing import List, Optional
 
@@ -78,7 +86,27 @@ def format_concept_note(
     prerequisites: Optional[List[str]] = None,
     status: str = "current"
 ) -> str:
-    """Formats a standardized Obsidian concept note with wikilinks and YAML frontmatter."""
+    """
+    Formats a standardized Obsidian concept note with wikilinks and YAML frontmatter.
+
+    Args:
+        title: Concept title (e.g., 'Transformer Self-Attention').
+        course: Course name or code (e.g., 'Deep Learning').
+        one_line_summary: High-level concise takeaway.
+        core_intuition: Conceptual breakdown explaining the 'why'.
+        formal_definition: Mathematical equations or formal specifications.
+        key_properties: Asymptotic bounds, complexity, or structural properties.
+        worked_example: Concrete step-by-step application.
+        common_pitfalls: Common student misconceptions or failure modes.
+        connections: List of note names to link via `[[wikilinks]]`.
+        open_questions: List of unresolved questions formatted as `- [ ]`.
+        tags: List of tags for Obsidian indexing.
+        prerequisites: List of prerequisite concept names.
+        status: Note lifecycle status ('current', 'evergreen', 'draft').
+
+    Returns:
+        Rendered markdown string ready to be saved to `workspace/artifacts/`.
+    """
     tags_str = ", ".join(tags) if tags else f"concept, {course.lower().replace(' ', '-')}"
     prereqs_str = ", ".join(f'"{p}"' for p in (prerequisites or []))
     
@@ -106,3 +134,4 @@ def format_concept_note(
         connections=conn_str,
         open_questions=oq_str
     )
+

@@ -1,3 +1,11 @@
+"""
+Base Tooling and Registry Module for StudyMate.
+
+Defines the abstract BaseTool interface, OpenAI function-calling schema serialization,
+tool origin attribution (builtin vs MCP vs memory), and the ToolRegistry dispatcher
+with integrated security policy gating and interactive confirmation hooks.
+"""
+
 from abc import ABC, abstractmethod
 import logging
 import time
@@ -95,7 +103,7 @@ class ToolRegistry:
         self._tools: Dict[str, BaseTool] = {}
         self.policy = policy
         self.confirmation_handler = confirmation_handler
-        # Lifecycle hook seam (Week 3 observability): listeners for permission events.
+        # Lifecycle hook seam: listeners for permission events.
         self.on_permission_decision: List[Callable[[PermissionEvent], None]] = []
 
     def _emit(self, event: PermissionEvent) -> None:
@@ -213,9 +221,4 @@ class ToolRegistry:
         if approved:
             return None
         return f"Error: User denied the requested tool call '{name}' ({rule_desc}). Do not retry this exact call."
-        duration_s = time.perf_counter() - start
-        # Convention: tools surface failures as "Error..." observation strings.
-        status = "error" if result.startswith("Error") else "ok"
-        observe_tool(name, source=source, status=status, duration_s=duration_s)
-        observe_component_latency("tool", duration_s)
-        return result
+

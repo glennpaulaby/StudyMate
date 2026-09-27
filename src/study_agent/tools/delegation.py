@@ -1,3 +1,11 @@
+"""
+Subagent Task Delegation & Research Tools for StudyMate.
+
+Provides the `delegate_task` tool used by the parent agent to delegate specialized
+tasks to child subagents ('researcher', 'examiner') in isolated context windows,
+as well as the `research_topic` tool used by the researcher subagent.
+"""
+
 import logging
 import time
 from typing import Any, Callable, Dict, Optional
@@ -27,6 +35,17 @@ class DelegateTaskTool(BaseTool):
         observability: Optional[ObservabilityConfig] = None,
         on_subagent_run: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
+        """
+        Initializes the delegation tool.
+
+        Args:
+            llm_client: LLM client used to power child subagents.
+            subagent_registry: Registry containing subagent definitions.
+            parent_tool_registry: Parent tool registry to filter tools from.
+            parent_run_id: Active parent run ID for linked tracing.
+            observability: Observability settings for Prometheus/Langfuse.
+            on_subagent_run: Callback invoked when a child run finishes.
+        """
         self.llm_client = llm_client
         self.subagent_registry = subagent_registry or get_default_subagent_registry()
         self.parent_tool_registry = parent_tool_registry
@@ -76,6 +95,7 @@ class DelegateTaskTool(BaseTool):
         and returns the child's final output string as the tool observation.
         Catches child execution timeouts and errors gracefully.
         """
+        # Sanitize whitespace and normalize subagent name
         clean_subagent_name = (subagent_name or "").strip().lower()
         clean_task = (task or "").strip()
 
@@ -151,11 +171,7 @@ class DelegateTaskTool(BaseTool):
         duration_s: float,
         error: str,
     ) -> None:
-        """Fans a finished delegation out to Prometheus + trace sinks.
-
-        Telemetry must never break a delegation: listener errors are
-        contained, mirroring ``ToolRegistry._emit``.
-        """
+        """Fans a finished delegation out to Prometheus + trace sinks."""
         try:
             observe_subagent(subagent_name, status)
         except Exception as e:  # pragma: no cover - defensive
@@ -183,7 +199,7 @@ class DelegateTaskTool(BaseTool):
 
 class ResearchTopicTool(BaseTool):
     """
-    Simulated or academic literature exploration tool for the researcher subagent.
+    Academic literature exploration tool for the researcher subagent.
     """
 
     def __init__(self, notes_dir: Optional[str] = None) -> None:
@@ -240,4 +256,5 @@ def register_delegation_tools(
     )
     registry.register(tool)
     registry.register(ResearchTopicTool())
+
 

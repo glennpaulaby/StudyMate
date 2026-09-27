@@ -1,3 +1,12 @@
+"""
+Persistent SQLite Episodic & Semantic Memory Store for StudyMate.
+
+Manages conversational thread persistence and long-term semantic facts.
+Strictly adheres to StudyMate's no-delete invariant: archived threads and facts
+are tombstoned via `archived = 1` rather than deleted. Supports vector similarity
+search via the sqlite-vector extension with automatic fallback to keyword search.
+"""
+
 import json
 import logging
 import sqlite3
@@ -14,12 +23,21 @@ logger = logging.getLogger(__name__)
 
 
 def _utc_now_iso() -> str:
-    """Returns current UTC timestamp as ISO string."""
+    """Returns current UTC timestamp as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 class ThreadRecord(BaseModel):
-    """Persistent thread metadata (episodic container)."""
+    """
+    Persistent chat thread metadata (episodic session container).
+    
+    Attributes:
+        id: Unique hex thread identifier.
+        name: Human-readable topic or session title.
+        created_at: ISO-8601 creation timestamp.
+        updated_at: ISO-8601 timestamp of most recent activity.
+        archived: Tombstone flag; archived threads are hidden from listings but never deleted.
+    """
     id: str = Field(description="Unique thread identifier")
     name: str = Field(description="Human-readable thread name")
     created_at: str = Field(description="ISO creation timestamp")
@@ -28,7 +46,19 @@ class ThreadRecord(BaseModel):
 
 
 class FactRecord(BaseModel):
-    """Persistent semantic fact (user preference or learned fact)."""
+    """
+    Persistent semantic fact or user study preference.
+    
+    Attributes:
+        id: Auto-increment primary key.
+        topic: Topic categorization tag (e.g. 'deep-learning', 'study-habits').
+        fact: Durable statement text.
+        tags: List of keywords for indexing.
+        source_thread: Thread ID where the fact was recorded.
+        source_thread_name: Thread title for human provenance.
+        created_at: ISO-8601 timestamp.
+        archived: Tombstone flag for soft deletion.
+    """
     id: int = Field(description="Auto-increment fact identifier")
     topic: str = Field(description="Short topic label (e.g. 'dijkstra', 'study-preferences')")
     fact: str = Field(description="The durable fact text")
@@ -41,7 +71,7 @@ class FactRecord(BaseModel):
 
 class MemoryStore:
     """
-    SQLite-backed episodic store for chat threads.
+    SQLite-backed episodic store for chat threads and semantic facts.
 
     Lives under `workspace/artifacts/memory/` so it stays inside the
     existing `allowed_write` jail. Append-only; no delete API
@@ -55,11 +85,18 @@ class MemoryStore:
     )
 
     def __init__(self, db_path: str | Path) -> None:
+        """
+        Initializes the SQLite database connection and runs schema migrations.
+
+        Args:
+            db_path: Filepath to the SQLite database file.
+        """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._init_db()
+
         # Extension load is per-connection; failure degrades to LIKE-only recall.
         from study_agent.memory.embeddings import load_sqlite_vector
 

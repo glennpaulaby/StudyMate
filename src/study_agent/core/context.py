@@ -1,9 +1,19 @@
-﻿from datetime import date
+"""
+Conversation Context & System Prompt Manager for StudyMate.
+
+Maintains in-memory chat message history, handles system prompt injection
+from `config/soul.md`, dynamically merges long-term memory facts and approved
+procedures into the leading SYSTEM message, and anchors reasoning to the real
+current date.
+"""
+
+from datetime import date
 from pathlib import Path
 from typing import List, Optional
 from study_agent.core.types import ChatMessage, Role, ToolCall
 
 
+#: Fallback system prompt used if config/soul.md is missing or unreadable
 DEFAULT_SYSTEM_PROMPT = (
     "You are StudyMate, an academic assistant designed to help students learn, "
     "summarize lecture notes, and generate study artifacts."
@@ -13,7 +23,7 @@ DEFAULT_SYSTEM_PROMPT = (
 class ContextManager:
     """
     Manages the short-term conversation context, system prompt injection, 
-    and history for the StudyMate agent.
+    and message history for the StudyMate agent.
     """
 
     def __init__(
@@ -21,6 +31,13 @@ class ContextManager:
         system_prompt_path: Optional[str | Path] = "config/soul.md",
         custom_system_prompt: Optional[str] = None
     ):
+        """
+        Initializes the ContextManager and sets up the primary SYSTEM prompt.
+
+        Args:
+            system_prompt_path: Filepath to the markdown persona prompt (soul.md).
+            custom_system_prompt: Optional override string for testing or child subagents.
+        """
         self.system_prompt_path = Path(system_prompt_path) if system_prompt_path else None
         self._custom_system_prompt = custom_system_prompt
         self.messages: List[ChatMessage] = []
@@ -29,7 +46,12 @@ class ContextManager:
         self._init_system_prompt()
 
     def _render_system_message(self) -> ChatMessage:
-        """Builds the single leading SYSTEM message (base prompt + date + injected note)."""
+        """
+        Builds the single leading SYSTEM message.
+        
+        Combines the base persona prompt, the current ISO date (to anchor web searches
+        and prevent temporal hallucinations), and any dynamically injected facts/routines.
+        """
         content = self._base_system
         # Anchor the model to the real current date. Without it, small models
         # answer "latest release" questions from stale training data and bake
@@ -40,7 +62,7 @@ class ContextManager:
         return ChatMessage(role=Role.SYSTEM, content=content)
 
     def _init_system_prompt(self) -> None:
-        """Loads the system prompt from file or fallback default."""
+        """Loads the system prompt from file or fallback default and initializes history."""
         system_content = self._custom_system_prompt
 
         if not system_content and self.system_prompt_path and self.system_prompt_path.exists():
@@ -92,7 +114,7 @@ class ContextManager:
         return self.messages
 
     def load_history(self, history: List[ChatMessage]) -> None:
-        """Replaces in-memory history with persisted thread messages (keeps system prompt)."""
+        """Replaces in-memory history with persisted thread messages (preserves system prompt)."""
         system_msg = self.messages[0] if self.messages and self.messages[0].role == Role.SYSTEM else None
         if system_msg is None:
             self._init_system_prompt()
@@ -100,10 +122,11 @@ class ContextManager:
         self.messages = [system_msg] + list(history or [])
 
     def inject_system_note(self, content: str) -> Optional[ChatMessage]:
-        """Merges a small high-value note (e.g. memory facts) into the leading SYSTEM message.
+        """
+        Merges a high-value note (e.g. memory facts or study procedures) into the leading SYSTEM message.
 
-        A second SYSTEM entry breaks strict chat templates (vLLM/LiteLLM 400:
-        "System message must be at the beginning"), so the note is folded into
+        A second SYSTEM entry breaks strict chat templates (e.g. vLLM/LiteLLM 400:
+        'System message must be at the beginning'), so the note is folded into
         messages[0] instead of appended. Replaces any previous note.
         """
         if not (content or "").strip():
@@ -137,3 +160,4 @@ class ContextManager:
     def user_turn_count(self) -> int:
         """Returns number of user messages in history."""
         return sum(1 for m in self.messages if m.role == Role.USER)
+

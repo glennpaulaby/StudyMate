@@ -1,8 +1,19 @@
-﻿import os
+"""
+Configuration Loader Module for StudyMate.
+
+Handles multi-tier configuration loading and merging:
+1. Environment variables (e.g., INNKUBE_API_KEY, STUDYMATE_METRICS_ENABLED).
+2. .env file in project root.
+3. YAML configuration file (config/config.yaml).
+4. Pydantic default schema values.
+"""
+
+import os
 import yaml
 from pathlib import Path
 from typing import Optional
 from study_agent.config.settings import AppConfig
+
 
 
 def _load_env_file(env_path: Path) -> None:

@@ -1,3 +1,16 @@
+"""
+StudyMate Interactive Terminal CLI & REPL.
+
+Provides the primary user interface:
+- Interactive prompt_toolkit / Rich terminal REPL with live status toolbar.
+- Slash-command dispatcher (/help, /ingest, /lint, /grill, /threads, /compact, etc.).
+- Subagent delegation trigger awareness (Examiner & Researcher).
+- Vault linting with automatic repair loop.
+- Socratic griller sparring sessions.
+- Interactive multi-tier permission confirmations.
+- SQLite episodic memory restoration and thread switching.
+"""
+
 import logging
 import sys
 import time
@@ -13,6 +26,7 @@ if sys.platform == "win32":
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
 
 from rich.console import Console
 from rich.markdown import Markdown

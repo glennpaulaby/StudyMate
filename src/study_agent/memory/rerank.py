@@ -1,3 +1,11 @@
+"""
+Semantic Document & Fact Reranker for StudyMate.
+
+Provides cross-encoder scoring of candidate memory facts against query strings.
+Supports InnKube's `/rerank` route (e.g. `qwen3-reranker-4b`) and deterministic
+mock implementations for unit tests.
+"""
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
@@ -17,20 +25,21 @@ class Reranker(ABC):
 
     @abstractmethod
     def rerank(self, query: str, documents: List[str]) -> List[Tuple[int, float]]:
-        """Scores documents against the query.
+        """
+        Scores documents against the query.
 
-        Returns [(input_index, score)] sorted by score descending.
-        Must never raise to callers — errors are handled by the caller.
+        Returns:
+            List of (input_index, score) tuples sorted by score descending.
         """
         pass
 
 
 def parse_rerank_response(data: object, count: int) -> List[Tuple[int, float]]:
-    """Normalizes a /rerank JSON payload to [(index, score)] sorted desc.
+    """
+    Normalizes a /rerank JSON payload to [(index, score)] sorted descending.
 
-    Defensive: the endpoint is outside the OpenAI spec, so several envelope
-    shapes are accepted (results/rankings/data keys or a bare list; score,
-    relevance_score, or relevance fields). Raises ValueError when unparseable.
+    Defensive parser: accepts varying response shapes (results/rankings/data keys
+    or a bare list; score, relevance_score, or relevance fields).
     """
     items: object = data
     if isinstance(data, dict):
@@ -67,6 +76,15 @@ class InnKubeReranker(Reranker):
         model: str = "qwen3-reranker-4b",
         timeout: float = 60.0,
     ) -> None:
+        """
+        Initializes the InnKube reranker client.
+
+        Args:
+            api_key: Authentication API key.
+            base_url: Endpoint base URL.
+            model: Reranker model identifier (e.g. 'qwen3-reranker-4b').
+            timeout: HTTP request timeout in seconds.
+        """
         self._api_key = api_key or "placeholder_key"
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -111,3 +129,4 @@ class MockReranker(Reranker):
         self.calls.append((query, list(documents)))
         scored = [(i, float(self._scores.get(doc, 0.0))) for i, doc in enumerate(documents)]
         return sorted(scored, key=lambda pair: pair[1], reverse=True)
+

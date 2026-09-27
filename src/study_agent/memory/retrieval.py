@@ -1,3 +1,11 @@
+"""
+Hybrid Fact Retrieval & Rank Fusion for StudyMate.
+
+Combines exact keyword filtering (LIKE), dense vector similarity search
+(sqlite-vector cosine distance), on-the-fly embedding backfilling, and
+optional cross-encoder reranking to retrieve high-precision memory facts.
+"""
+
 import logging
 from typing import List, Optional, Tuple
 from study_agent.memory.embeddings import Embedder, pack_embedding
@@ -43,12 +51,22 @@ def hybrid_recall(
     limit: int = 5,
     reranker: Optional[Reranker] = None,
 ) -> Tuple[List[FactRecord], bool]:
-    """LIKE page union vector page for a query, optionally reranked.
+    """
+    Combines LIKE keyword search with dense vector similarity search, optionally reranked.
 
     LIKE hits come first (precise), then semantic-only extras up to `limit`,
-    then an optional reranker reorder. Returns (records, semantic_used).
-    Any embedding/rerank failure degrades gracefully instead of raising —
-    tools must never throw to the LLM.
+    then an optional reranker reorder.
+    
+    Args:
+        store: SQLite MemoryStore containing fact tables.
+        query: User query string.
+        embedder: Optional Embedder instance for vector search.
+        limit: Max number of facts to return.
+        reranker: Optional cross-encoder reranker.
+
+    Returns:
+        Tuple of (records, semantic_used).
+        Any embedding/rerank failure degrades gracefully instead of raising.
     """
     like_hits = store.recall_facts(query, limit=limit)
     if embedder is None or not (query or "").strip():
@@ -73,3 +91,4 @@ def hybrid_recall(
     if reranker is not None:
         merged, _reranked = _apply_rerank(merged, query.strip(), reranker)
     return merged, True
+

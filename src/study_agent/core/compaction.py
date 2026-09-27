@@ -1,3 +1,12 @@
+"""
+Context-Window Compaction & Checkpointing for StudyMate.
+
+Implements token estimation, dynamic context window discovery, and tiered
+conversation history compaction (micro-pruning older tool outputs followed
+by an LLM-driven structured session summary) to prevent context exhaustion
+during long study sessions.
+"""
+
 import json as _json
 import logging
 import re
@@ -26,7 +35,16 @@ _window_cache: Dict[str, Tuple[int, str]] = {}
 
 
 def estimate_tokens(messages: List[ChatMessage], tool_schemas: Optional[List[Dict[str, Any]]] = None) -> int:
-    """Heuristic size of the next request: serialized messages + schemas, chars/4."""
+    """
+    Estimates token count of the next inference request: serialized messages + schemas, chars / 4.
+    
+    Args:
+        messages: List of current chat messages.
+        tool_schemas: Optional list of function schemas available to the model.
+        
+    Returns:
+        Estimated token count (at least 1).
+    """
     chars = 0
     for msg in messages:
         chars += len(msg.content or "")
@@ -75,10 +93,12 @@ def resolve_context_window(
     base_url: str = "",
     discover: bool = True,
 ) -> Tuple[int, str]:
-    """Resolves the context window: explicit table > gateway > [Nm] suffix > default.
+    """
+    Resolves the context window: explicit table > gateway > [Nm] suffix > default.
 
-    Returns (tokens, source) where source documents which layer won (Claude's
-    /autocompact transparency lesson). Unknown models fall back conservative.
+    Returns:
+        Tuple of (tokens, source) where source documents which layer won
+        (e.g., 'config', 'gateway', 'suffix', 'default').
     """
     if model in cfg.context_windows:
         return cfg.context_windows[model], "config"
@@ -97,7 +117,7 @@ def resolve_context_window(
 
 
 def compaction_threshold_tokens(window: int, cfg: CompactionConfig, completion_reserve: int = 0) -> int:
-    """Token estimate that fires compaction, keeping headroom for the summary call itself."""
+    """Calculates the token estimate threshold that fires auto-compaction."""
     return min(int(window * cfg.threshold), max(0, window - cfg.buffer - completion_reserve))
 
 
@@ -141,11 +161,14 @@ def maybe_compact(
     force: bool = False,
     state: Optional[CompactionState] = None,
 ) -> Tuple[bool, int, int]:
-    """Tiered compaction: free micro-prune, then one tool-less LLM summary if still over budget.
+    """
+    Tiered compaction: free micro-prune, then one tool-less LLM summary if still over budget.
 
-    Operates on the live message list (system at [0] never summarized). Returns
-    (compacted, tokens_before, tokens_after). Never raises — failures return False
-    and feed the circuit breaker.
+    Operates on the live message list (system at [0] never summarized).
+    
+    Returns:
+        Tuple of (compacted, tokens_before, tokens_after).
+        Never raises — failures return False and feed the circuit breaker.
     """
     state = state or CompactionState()
     if not cfg.enabled and not force:
@@ -221,3 +244,4 @@ def is_context_overflow(error: Exception) -> bool:
 def clear_window_cache() -> None:
     """Test hook: resets gateway discovery cache."""
     _window_cache.clear()
+

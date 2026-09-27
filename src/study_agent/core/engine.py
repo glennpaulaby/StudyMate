@@ -1,3 +1,15 @@
+"""
+StudyMate Core Agent Engine.
+
+This module implements the autonomous ReAct (Reason + Act) orchestration loop:
+1. Context Preparation & Telemetry Initiation.
+2. Context Guard & Compaction Check (proactive context window management).
+3. Reason Turn (LLM chat inference with tool specifications).
+4. Act Turn (Sandboxed tool execution via ToolRegistry, security validation, and MCP dispatch).
+5. Observe Turn (Feeding tool execution outputs back into conversation history).
+6. Completion or Graceful Budget Exhaustion Handling.
+"""
+
 import logging
 import time
 from datetime import datetime, timezone
@@ -55,8 +67,10 @@ def _llm_error_status(error: Exception) -> str:
 class AgentEngine:
     """
     Executes the core ReAct (Reason + Act) loop.
+
     Coordinates between the LLM inference client, conversation context,
-    and sandboxed tool execution registry.
+    and sandboxed tool execution registry. Manages proactive context
+    compaction, tracing, telemetry events, and subagent delegation traces.
     """
 
     def __init__(

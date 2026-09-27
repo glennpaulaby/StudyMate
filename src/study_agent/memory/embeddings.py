@@ -1,3 +1,11 @@
+"""
+Text Embeddings & Vector Operations for StudyMate Semantic Memory.
+
+Manages text vectorization, binary BLOB serialization for sqlite-vector
+(Float32 little-endian format), cosine similarity calculations, and client
+integrations (InnKube OpenAI-compatible embedding endpoint and MockEmbedder).
+"""
+
 import importlib.resources
 import logging
 import math
@@ -10,11 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 def load_sqlite_vector(conn: sqlite3.Connection) -> bool:
-    """Loads the sqlite-vector extension into a connection.
+    """
+    Loads the sqlite-vector extension into an active SQLite connection.
 
-    Returns True on success, False on any failure (missing package,
-    disabled extension loading, platform mismatch) — callers fall back
-    to LIKE-only recall. Never raises.
+    Returns:
+        True on success, False on any failure (missing package, disabled
+        extension loading, platform mismatch) — callers fall back to LIKE-only recall.
+        Never raises.
     """
     try:
         ext_path = importlib.resources.files("sqlite_vector.binaries") / "vector"
@@ -40,10 +50,15 @@ def pack_embedding(vector: List[float]) -> bytes:
 
 
 def unpack_embedding(blob: bytes, fmt: str = "f") -> List[float]:
-    """Unpacks a BLOB back into a float vector.
+    """
+    Unpacks a binary BLOB back into a Python float list.
 
-    `fmt="f"` reads current Float32 rows; `fmt="d"` reads legacy Float64 rows
-    (pre-sqlite-vector) for one-way migration.
+    Args:
+        blob: Raw byte buffer.
+        fmt: Format char ('f' for Float32, 'd' for legacy Float64).
+        
+    Returns:
+        List of floating point values.
     """
     size = struct.calcsize(fmt)
     if not blob or len(blob) % size != 0:
@@ -59,7 +74,7 @@ def embedding_dim(blob: bytes) -> int:
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Cosine similarity in [-1, 1]; 0.0 when either vector is zero-length/norm."""
+    """Calculates cosine similarity in [-1, 1]; returns 0.0 when either vector is zero-length/norm."""
     if not a or not b or len(a) != len(b):
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
@@ -95,6 +110,15 @@ class InnKubeEmbedder(Embedder):
         model: str = "octen-embedding-8b",
         timeout: float = 60.0,
     ) -> None:
+        """
+        Initializes the InnKube embedder client.
+
+        Args:
+            api_key: Authentication API key.
+            base_url: Base endpoint URL.
+            model: Model identifier (e.g. 'octen-embedding-8b').
+            timeout: HTTP request timeout in seconds.
+        """
         self._api_key = api_key or "placeholder_key"
         self._base_url = base_url
         self._model = model
@@ -148,3 +172,4 @@ class MockEmbedder(Embedder):
         """Returns scripted vectors (zero vector fallback); records calls."""
         self.calls.append(list(texts))
         return [list(self._vectors.get(t, [0.0] * self._dim)) for t in texts]
+

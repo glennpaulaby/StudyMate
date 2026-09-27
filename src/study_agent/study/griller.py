@@ -1,3 +1,11 @@
+"""
+Socratic Grilling & Active-Recall Assessment Engine for StudyMate.
+
+Orchestrates multi-level Socratic examinations (Level 1: Recall, Level 2: Application,
+Level 3: Adversarial Edge Cases) modeled after Professor White's adversarial academic
+rigor to test student comprehension.
+"""
+
 from typing import Optional
 
 
@@ -23,7 +31,16 @@ class SocraticGriller:
 
     @staticmethod
     def create_initial_prompt(topic: str, context_material: Optional[str] = None) -> str:
-        """Generates the prompt to launch an interactive grilling session on a topic."""
+        """
+        Generates the prompt to launch an interactive grilling session on a topic.
+
+        Args:
+            topic: Subject or concept to test.
+            context_material: Optional text excerpts or lecture notes for reference.
+
+        Returns:
+            Instructional prompt to trigger Level 1 examination.
+        """
         prompt = f"Let's grill the student on the topic: '{topic}'.\n"
         if context_material:
             prompt += f"\nRelevant study context:\n```\n{context_material}\n```\n"
@@ -40,7 +57,18 @@ class SocraticGriller:
         student_answer: str,
         reference_notes: Optional[str] = None
     ) -> str:
-        """Evaluates student's answer and determines the next question."""
+        """
+        Evaluates student's answer and determines the next question.
+
+        Args:
+            topic: The topic being tested.
+            question: The question posed to the student.
+            student_answer: The student's response.
+            reference_notes: Ground-truth reference materials.
+
+        Returns:
+            Prompt instructing the model to provide a rigorous academic evaluation.
+        """
         prompt = (
             f"Topic: {topic}\n"
             f"Exam Question: {question}\n"
@@ -56,3 +84,4 @@ class SocraticGriller:
             "3. Next Action: If correct, advance to the next level question. If flawed, ask a probing Socratic question to guide them."
         )
         return prompt
+

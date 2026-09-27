@@ -1,8 +1,24 @@
+"""
+Configuration Schema Definitions for StudyMate.
+
+Defines Pydantic models for all subsystems:
+- LLMConfig: Model name, temperature, base_url, embeddings, and reranker settings.
+- AgentConfig: Agent persona name, max reasoning iterations, and workspace paths.
+- FilesystemToolConfig: Path sandboxing rules and no-delete security invariant.
+- MCPToolConfig: External web-search and Obsidian vault configuration.
+- MemoryConfig: SQLite episodic thread persistence settings.
+- CompactionConfig: Context window compaction heuristics and buffer limits.
+- PermissionsConfig: Security policy rules and default gating decision.
+- ObservabilityConfig: Prometheus exporter, JSONL tracing, Langfuse telemetry, and health probes.
+- AppConfig: Root composite configuration.
+"""
+
 from typing import Dict, List
 from pydantic import BaseModel, Field
 
 
 class LLMConfig(BaseModel):
+
     """Configuration for LLM inference endpoint (e.g. InnKube cluster)."""
     model: str = Field(default="qwen-agentworld-35b-a3b", description="Model identifier")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
