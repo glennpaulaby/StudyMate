@@ -8,7 +8,7 @@ llm:
   # - gemma4-31b-it
   model: "qwen-agentworld-35b-a3b"
   temperature: 0.2
-  max_tokens: 2048
+  max_tokens: 4096
   base_url: "https://llms.innkube.fim.uni-passau.de"
   timeout: 60.0
   embedding_model: "octen-embedding-8b"

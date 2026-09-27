@@ -279,7 +279,10 @@ def print_banner(config: AppConfig) -> None:
     banner_text = (
         f"[bold cyan]StudyMate[/bold cyan] [dim]— Autonomous Academic Study Assistant[/dim]\n"
         f"[dim]Model:[/dim] [green]{config.llm.model}[/green]  "
-        f"[dim]Endpoint:[/dim] [yellow]{config.llm.base_url}[/yellow]\n"
+        f"[dim]Endpoint:[/dim] [yellow]{config.llm.base_url}[/yellow]\n\n"
+        f"[bold magenta]🤖 Specialized Subagents (Context-Isolated):[/bold magenta]\n"
+        f"  [bold yellow]• 🔬 Researcher :[/bold yellow] [dim]Ask[/dim] [italic]\"delegate to researcher for <topic>\"[/italic] [dim]for deep external literature & comparative analysis[/dim]\n"
+        f"  [bold yellow]• 🎓 Examiner   :[/bold yellow] [dim]Ask[/dim] [italic]\"use examiner to test me on <topic>\"[/italic] [dim](or [bold]/grill <topic>[/bold]) for active-recall Socratic testing[/dim]\n\n"
         f"[dim]Type your question or study goal. Type [bold]/help[/bold] for commands or [bold]/exit[/bold] to quit.[/dim]"
     )
     console.print(Panel(banner_text, title="🎓 Welcome to StudyMate", border_style="cyan"))
@@ -288,12 +291,14 @@ def print_banner(config: AppConfig) -> None:
 def print_help() -> None:
     """Displays available interactive CLI commands."""
     table = Table(title="StudyMate Commands", show_header=True, header_style="bold magenta")
-    table.add_column("Command", style="cyan", width=20)
+    table.add_column("Command / Mode", style="cyan", width=25)
     table.add_column("Description", style="white")
     table.add_row("/help", "Show this help table")
     table.add_row(escape("/ingest [path]"), "Ingest source files and generate Obsidian concept notes + lecture summary")
     table.add_row(escape("/lint [path]"), "Lint the vault and automatically repair broken links and formatting issues")
-    table.add_row("/grill <topic>", "Launch an interactive Socratic grilling sparring session")
+    table.add_row("/grill <topic>", "Launch an interactive Socratic sparring session with the Examiner subagent")
+    table.add_row(escape("🔬 \"delegate to researcher...\""), "Trigger the Researcher subagent for deep multi-source literature benchmarks")
+    table.add_row(escape("🎓 \"use examiner to test me...\""), "Trigger the Examiner subagent for active-recall comprehension drills")
     table.add_row("/templates", "Display standard Obsidian markdown templates")
     table.add_row("/threads", "List previous chat threads")
     table.add_row(escape("/thread <id|name>"), "Enter/continue a previous thread")
