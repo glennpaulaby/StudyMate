@@ -76,13 +76,16 @@ class DelegateTaskTool(BaseTool):
         and returns the child's final output string as the tool observation.
         Catches child execution timeouts and errors gracefully.
         """
-        if not subagent_name:
+        clean_subagent_name = (subagent_name or "").strip().lower()
+        clean_task = (task or "").strip()
+
+        if not clean_subagent_name:
             return "Error: 'subagent_name' parameter is required."
 
-        if not task or not task.strip():
+        if not clean_task:
             return "Error: 'task' parameter cannot be empty."
 
-        config = self.subagent_registry.get(subagent_name)
+        config = self.subagent_registry.get(clean_subagent_name)
         if not config:
             available = ", ".join(self.subagent_registry.list_names())
             return (
@@ -91,20 +94,20 @@ class DelegateTaskTool(BaseTool):
             )
 
         try:
-            logger.info(f"Delegating task to subagent '{subagent_name}': {task[:100]}...")
+            logger.info(f"Delegating task to subagent '{clean_subagent_name}': {clean_task[:100]}...")
             child_engine = self.subagent_registry.create_engine(
-                name=subagent_name,
+                name=clean_subagent_name,
                 llm_client=self.llm_client,
                 base_registry=self.parent_tool_registry,
                 parent_run_id=self.parent_run_id,
                 observability=self.observability,
             )
             start = time.perf_counter()
-            child_result = child_engine.run(task)
+            child_result = child_engine.run(clean_task)
             duration_s = time.perf_counter() - start
             status = "success" if child_result.is_success else "error"
             self._record_run(
-                subagent_name=subagent_name,
+                subagent_name=clean_subagent_name,
                 status=status,
                 child_result=child_result,
                 duration_s=duration_s,
@@ -117,27 +120,27 @@ class DelegateTaskTool(BaseTool):
                 return child_result.final_response
             else:
                 error_msg = child_result.error_message or child_result.final_response
-                return f"Subagent '{subagent_name}' failed: {error_msg}"
+                return f"Subagent '{clean_subagent_name}' failed: {error_msg}"
         except TimeoutError as te:
-            logger.error(f"Timeout in child subagent '{subagent_name}': {te}")
+            logger.error(f"Timeout in child subagent '{clean_subagent_name}': {te}")
             self._record_run(
-                subagent_name=subagent_name,
+                subagent_name=clean_subagent_name,
                 status="error",
                 child_result=None,
                 duration_s=0.0,
                 error=f"timed out: {te}",
             )
-            return f"Error: Subagent '{subagent_name}' timed out: {str(te)}"
+            return f"Error: Subagent '{clean_subagent_name}' timed out: {str(te)}"
         except Exception as e:
-            logger.error(f"Error executing subagent '{subagent_name}': {e}", exc_info=True)
+            logger.error(f"Error executing subagent '{clean_subagent_name}': {e}", exc_info=True)
             self._record_run(
-                subagent_name=subagent_name,
+                subagent_name=clean_subagent_name,
                 status="error",
                 child_result=None,
                 duration_s=0.0,
                 error=str(e),
             )
-            return f"Error executing subagent '{subagent_name}': {str(e)}"
+            return f"Error executing subagent '{clean_subagent_name}': {str(e)}"
 
     def _record_run(
         self,
