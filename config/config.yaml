@@ -75,7 +75,7 @@ permissions:
   default_decision: "require-user-confirmation"
   rules:
     # Tier 1 — observe: read-only inspection, always allowed.
-    - tools: ["read_file", "read_pdf", "list_files", "search_text"]
+    - tools: ["read_file", "read_pdf", "list_files", "search_text", "research_topic"]
       decision: "allow"
       tier: "observe"
     - tools: ["obsidian_list_notes", "obsidian_read_note", "obsidian_search_notes",
@@ -96,8 +96,8 @@ permissions:
     - tools: ["memory_store"]
       decision: "allow"
       tier: "sandbox-edit"
-    # Tier 3 — consequential: outward-facing / non-deterministic sources.
-    - tools: ["web_search", "fetch_web_content", "expand_web_link"]
+    # Tier 3 — consequential: outward-facing / delegation / non-deterministic sources.
+    - tools: ["web_search", "fetch_web_content", "expand_web_link", "delegate_task"]
       decision: "require-user-confirmation"
       tier: "consequential"
 
